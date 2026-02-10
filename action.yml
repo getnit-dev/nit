@@ -1,0 +1,115 @@
+name: 'nit - AI Testing & Quality Agent'
+description: 'Auto-detect your stack and generate comprehensive tests using AI'
+author: 'nit contributors'
+
+branding:
+  icon: 'check-circle'
+  color: 'green'
+
+inputs:
+  mode:
+    description: 'Operation mode: hunt (scan+analyze+generate+test), run (run existing tests), drift (check LLM drift), docs (generate documentation)'
+    required: false
+    default: 'hunt'
+
+  llm_provider:
+    description: 'LLM provider: openai, anthropic, ollama, bedrock, vertex_ai, etc.'
+    required: true
+
+  llm_model:
+    description: 'LLM model name (e.g., gpt-4o, claude-3-5-sonnet-20241022)'
+    required: false
+    default: ''
+
+  llm_api_key:
+    description: 'API key for the LLM provider'
+    required: false
+    default: ''
+
+  path:
+    description: 'Path to analyze (for monorepo support)'
+    required: false
+    default: '.'
+
+  test_type:
+    description: 'Test type filter: unit, integration, e2e, all'
+    required: false
+    default: 'all'
+
+  coverage_target:
+    description: 'Target coverage percentage (1-100)'
+    required: false
+    default: '80'
+
+  python_version:
+    description: 'Python version to use'
+    required: false
+    default: '3.14'
+
+outputs:
+  tests_generated:
+    description: 'Number of tests generated'
+    value: ${{ steps.run_nit.outputs.tests_generated }}
+
+  tests_passed:
+    description: 'Number of tests that passed'
+    value: ${{ steps.run_nit.outputs.tests_passed }}
+
+  coverage_before:
+    description: 'Coverage percentage before test generation'
+    value: ${{ steps.run_nit.outputs.coverage_before }}
+
+  coverage_after:
+    description: 'Coverage percentage after test generation'
+    value: ${{ steps.run_nit.outputs.coverage_after }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python_version }}
+
+    - name: Install nit
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        pip install getnit
+
+    - name: Run nit
+      id: run_nit
+      shell: bash
+      env:
+        OPENAI_API_KEY: ${{ inputs.llm_api_key }}
+        ANTHROPIC_API_KEY: ${{ inputs.llm_api_key }}
+      run: |
+        # Build nit command
+        CMD="nit ${{ inputs.mode }}"
+
+        # Add optional flags
+        if [ -n "${{ inputs.llm_model }}" ]; then
+          CMD="$CMD --model ${{ inputs.llm_model }}"
+        fi
+
+        if [ "${{ inputs.path }}" != "." ]; then
+          CMD="$CMD --path ${{ inputs.path }}"
+        fi
+
+        if [ "${{ inputs.test_type }}" != "all" ]; then
+          CMD="$CMD --test-type ${{ inputs.test_type }}"
+        fi
+
+        if [ -n "${{ inputs.coverage_target }}" ]; then
+          CMD="$CMD --coverage-target ${{ inputs.coverage_target }}"
+        fi
+
+        # Run nit and capture output
+        echo "Running: $CMD"
+        $CMD | tee nit_output.txt
+
+        # Parse output and set action outputs (placeholder - adjust based on actual nit output format)
+        echo "tests_generated=0" >> $GITHUB_OUTPUT
+        echo "tests_passed=0" >> $GITHUB_OUTPUT
+        echo "coverage_before=0" >> $GITHUB_OUTPUT
+        echo "coverage_after=0" >> $GITHUB_OUTPUT
