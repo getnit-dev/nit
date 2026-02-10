@@ -1,0 +1,131 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "getnit"
+version = "0.1.0"
+description = "Open-source AI testing, documentation & quality agent"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.14"
+authors = [
+    { name = "nit contributors" },
+]
+keywords = ["testing", "ai", "quality", "documentation", "code-analysis"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = [
+    "click>=8.1",
+    "pyyaml>=6.0",
+    "litellm>=1.0",
+    "tree-sitter>=0.23",
+    "tree-sitter-language-pack>=0.3",
+    "rich>=14.3.2",
+    "requests>=2.32",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+    "ruff>=0.8",
+    "black>=26.1.0",
+    "mypy>=1.13",
+    "pre-commit>=4.0",
+    "types-requests>=2.32",
+]
+
+[project.scripts]
+nit = "nit.cli:cli"
+
+[project.urls]
+Homepage = "https://getnit.dev"
+Repository = "https://github.com/getnit/nit"
+Issues = "https://github.com/getnit/nit/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nit"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "F",     # pyflakes
+    "W",     # pycodestyle warnings
+    "I",     # isort
+    "N",     # pep8-naming
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "A",     # flake8-builtins
+    "SIM",   # flake8-simplify
+    "TCH",   # flake8-type-checking
+    "C4",    # flake8-comprehensions
+    "DTZ",   # flake8-datetimez
+    "T20",   # flake8-print (no print() in production code)
+    "RET",   # flake8-return
+    "PTH",   # flake8-use-pathlib
+    "ERA",   # eradicate (no commented-out code)
+    "PL",    # pylint
+    "PERF",  # perflint
+    "RUF",   # ruff-specific rules
+    "FBT",   # flake8-boolean-trap
+    "S",     # flake8-bandit (security)
+    "PIE",   # flake8-pie
+    "ISC",   # flake8-implicit-str-concat
+    "G",     # flake8-logging-format
+    "INP",   # flake8-no-pep420
+    "T10",   # flake8-debugger (no breakpoints)
+    "RSE",   # flake8-raise
+    "ICN",   # flake8-import-conventions
+    "ARG",   # flake8-unused-arguments
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",    # assert is fine in tests
+    "PLR2004", # magic values fine in tests
+    "ARG",     # unused args fine in tests (fixtures)
+    "TCH003",  # stdlib imports used at runtime in fixtures
+]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+warn_unreachable = true
+disallow_any_unimported = true
+disallow_any_generics = true
+disallow_subclassing_any = true
+disallow_untyped_calls = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+strict_equality = true
+extra_checks = true
+mypy_path = "src"
+files = ["src", "tests"]
+
+[tool.black]
+line-length = 100
+target-version = ["py314"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = [
+    "ignore:.*asyncio.iscoroutinefunction.*:DeprecationWarning:litellm.*",
+]

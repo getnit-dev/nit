@@ -1,0 +1,131 @@
+name: 'Nit — AI Testing Swarm'
+description: 'Generate tests, find bugs, monitor drift, update docs'
+branding:
+  icon: 'shield'
+  color: 'green'
+
+inputs:
+  mode:
+    description: 'Execution mode: hunt | scan | generate | run | drift | docs'
+    required: true
+    default: 'hunt'
+
+  llm_provider:
+    description: 'LLM provider: openai | anthropic | ollama'
+    required: false
+    default: ''
+
+  llm_model:
+    description: 'LLM model identifier (e.g., gpt-4o, claude-sonnet-4-5-20250514)'
+    required: false
+    default: ''
+
+  llm_api_key:
+    description: 'LLM API key (or set via secrets)'
+    required: false
+    default: ''
+
+  platform_url:
+    description: 'Platform API base URL (e.g., https://api.getnit.dev)'
+    required: false
+    default: ''
+
+  platform_api_key:
+    description: 'Platform virtual API key for llm-proxy/report uploads'
+    required: false
+    default: ''
+
+  dashboard_url:
+    description: 'Optional dashboard URL for reporting (e.g., https://getnit.dev)'
+    required: false
+    default: ''
+
+  dashboard_key:
+    description: 'Optional dashboard API key'
+    required: false
+    default: ''
+
+  path:
+    description: 'Project root directory'
+    required: false
+    default: '.'
+
+  coverage_target:
+    description: 'Target coverage percentage (for generate mode)'
+    required: false
+    default: ''
+
+  test_type:
+    description: 'Type of tests to generate: unit | e2e | integration | all'
+    required: false
+    default: 'all'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install nit
+      shell: bash
+      run: |
+        pip install --upgrade pip
+        pip install getnit
+
+    - name: Configure nit
+      shell: bash
+      run: |
+        mkdir -p .nit
+
+        # Set up LLM/platform configuration if provided
+        if [ -n "${{ inputs.llm_provider }}" ] || [ -n "${{ inputs.llm_model }}" ] || [ -n "${{ inputs.llm_api_key }}" ] || [ -n "${{ inputs.platform_url }}" ] || [ -n "${{ inputs.platform_api_key }}" ]; then
+          cat > .nit.yml <<EOF
+        llm:
+          provider: ${{ inputs.llm_provider }}
+          model: ${{ inputs.llm_model }}
+          api_key: ${{ inputs.llm_api_key }}
+        EOF
+
+          if [ -n "${{ inputs.platform_url }}" ] || [ -n "${{ inputs.platform_api_key }}" ]; then
+            PLATFORM_MODE="platform"
+            if [ -n "${{ inputs.llm_api_key }}" ]; then
+              PLATFORM_MODE="byok"
+            fi
+            cat >> .nit.yml <<EOF
+        platform:
+          url: ${{ inputs.platform_url }}
+          api_key: ${{ inputs.platform_api_key }}
+          mode: ${PLATFORM_MODE}
+        EOF
+          fi
+        fi
+
+    - name: Run nit
+      shell: bash
+      env:
+        NIT_LLM_API_KEY: ${{ inputs.llm_api_key }}
+        NIT_PLATFORM_URL: ${{ inputs.platform_url }}
+        NIT_PLATFORM_API_KEY: ${{ inputs.platform_api_key }}
+        NIT_DASHBOARD_URL: ${{ inputs.dashboard_url }}
+        NIT_DASHBOARD_KEY: ${{ inputs.dashboard_key }}
+      run: |
+        # Build command based on mode
+        CMD="nit ${{ inputs.mode }} --ci --path ${{ inputs.path }}"
+
+        # Add mode-specific flags
+        if [ "${{ inputs.mode }}" = "generate" ] || [ "${{ inputs.mode }}" = "hunt" ]; then
+          CMD="$CMD --type ${{ inputs.test_type }}"
+          if [ -n "${{ inputs.coverage_target }}" ]; then
+            CMD="$CMD --coverage-target ${{ inputs.coverage_target }}"
+          fi
+        fi
+
+        # Execute with proper error handling
+        echo "Running: $CMD"
+        $CMD
+        EXIT_CODE=$?
+
+        # Exit with the same code
+        exit $EXIT_CODE
