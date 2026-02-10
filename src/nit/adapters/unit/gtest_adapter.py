@@ -15,9 +15,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from nit.adapters.base import (
+    CaseResult,
     CaseStatus,
     RunResult,
-    TestCaseResult,
     TestFrameworkAdapter,
     ValidationResult,
 )
@@ -445,7 +445,7 @@ def _parse_gtest_xml(xml_text: str, raw_output: str) -> RunResult:
             result.passed += 1
 
         result.test_cases.append(
-            TestCaseResult(
+            CaseResult(
                 name=full_name,
                 status=status,
                 duration_ms=duration_ms,
@@ -505,9 +505,9 @@ def _parse_gtest_json(json_text: str, raw_output: str) -> RunResult:
     return result
 
 
-def _collect_json_test_cases(payload: dict[str, object]) -> list[TestCaseResult]:
+def _collect_json_test_cases(payload: dict[str, object]) -> list[CaseResult]:
     """Collect test cases recursively from Google Test JSON structures."""
-    results: list[TestCaseResult] = []
+    results: list[CaseResult] = []
 
     def _walk(node: object, *, parents: list[str]) -> None:
         if isinstance(node, list):
@@ -528,7 +528,7 @@ def _collect_json_test_cases(payload: dict[str, object]) -> list[TestCaseResult]
             file_path = _to_str(node.get("file"))
             case_name = ".".join(next_parents) if next_parents else "unknown"
             results.append(
-                TestCaseResult(
+                CaseResult(
                     name=case_name,
                     status=status,
                     duration_ms=duration,

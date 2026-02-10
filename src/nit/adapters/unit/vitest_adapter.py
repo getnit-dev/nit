@@ -15,9 +15,9 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 from nit.adapters.base import (
+    CaseResult,
     CaseStatus,
     RunResult,
-    TestCaseResult,
     TestFrameworkAdapter,
     ValidationResult,
 )
@@ -207,7 +207,7 @@ def _parse_vitest_json(stdout: str, raw_output: str) -> RunResult:
     skipped = 0
     errors = 0
     duration_ms = 0.0
-    test_cases: list[TestCaseResult] = []
+    test_cases: list[CaseResult] = []
 
     raw_suites = json_obj.get("testResults", [])
     suites: list[dict[str, object]] = raw_suites if isinstance(raw_suites, list) else []
@@ -244,7 +244,7 @@ def _parse_vitest_json(stdout: str, raw_output: str) -> RunResult:
                 errors += 1
 
             test_cases.append(
-                TestCaseResult(
+                CaseResult(
                     name=tc_name,
                     status=tc_status,
                     duration_ms=tc_duration,

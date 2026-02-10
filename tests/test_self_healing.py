@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from nit.adapters.base import CaseStatus, RunResult, TestCaseResult, ValidationResult
+from nit.adapters.base import CaseResult, CaseStatus, RunResult, ValidationResult
 from nit.agents.healers.self_healing import (
     DOMSnapshot,
     FailureClassification,
@@ -230,7 +230,7 @@ async def test_heal_selector_not_found_error(
         raw_output="Selector '#old-login-button' not found",
         success=False,
         test_cases=[
-            TestCaseResult(
+            CaseResult(
                 name="login",
                 status=CaseStatus.FAILED,
                 failure_message="locator('#old-login-button') not found",
@@ -285,7 +285,7 @@ async def test_heal_timeout_checks_for_flaky(
         raw_output="Timeout exceeded",
         success=False,
         test_cases=[
-            TestCaseResult(
+            CaseResult(
                 name="test",
                 status=CaseStatus.FAILED,
                 failure_message="Timeout 30000ms exceeded",
@@ -330,7 +330,7 @@ async def test_healing_result_for_flaky_test(
         raw_output="Test failed",
         success=False,
         test_cases=[
-            TestCaseResult(
+            CaseResult(
                 name="test",
                 status=CaseStatus.FAILED,
                 failure_message="Timeout exceeded",
@@ -373,7 +373,7 @@ async def test_no_healing_for_unknown_errors(
         raw_output="Unknown error",
         success=False,
         test_cases=[
-            TestCaseResult(
+            CaseResult(
                 name="test",
                 status=CaseStatus.FAILED,
                 failure_message="Something went wrong",
@@ -515,12 +515,12 @@ def test_extract_error_messages_from_test_cases() -> None:
         raw_output="Test output",
         success=False,
         test_cases=[
-            TestCaseResult(
+            CaseResult(
                 name="test1",
                 status=CaseStatus.FAILED,
                 failure_message="Error 1",
             ),
-            TestCaseResult(
+            CaseResult(
                 name="test2",
                 status=CaseStatus.FAILED,
                 failure_message="Error 2",
@@ -575,7 +575,7 @@ async def test_full_healing_flow(
         raw_output="Selector not found",
         success=False,
         test_cases=[
-            TestCaseResult(
+            CaseResult(
                 name="test",
                 status=CaseStatus.FAILED,
                 failure_message="locator('#old-selector') not found",

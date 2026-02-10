@@ -60,7 +60,7 @@ pipx install getnit
 ### From source (for development)
 
 ```bash
-git clone https://github.com/getnit/nit.git
+git clone https://github.com/getnit-dev/nit.git
 cd nit
 pip install -e ".[dev]"
 ```
@@ -390,7 +390,7 @@ Memory is stored in `.nit/memory/` and improves generation quality over time.
 
 ```bash
 # Clone the repo
-git clone https://github.com/getnit/nit.git
+git clone https://github.com/getnit-dev/nit.git
 cd nit
 
 # Create virtual environment
@@ -447,7 +447,7 @@ We welcome contributions! Here's how to get started:
 
 ### 1. Pick an issue
 
-Browse [open issues](https://github.com/getnit/nit/issues) or create a new one if you have an idea.
+Browse [open issues](https://github.com/getnit-dev/nit/issues) or create a new one if you have an idea.
 
 ### 2. Fork and create a branch
 
@@ -624,10 +624,10 @@ Yes. See the [GitHub Action](#github-action) section above. GitLab CI and Bitbuc
 ## Links
 
 - **Homepage**: [https://getnit.dev](https://getnit.dev)
-- **GitHub**: [https://github.com/getnit/nit](https://github.com/getnit/nit)
+- **GitHub**: [https://github.com/getnit-dev/nit](https://github.com/getnit-dev/nit)
 - **PyPI**: [https://pypi.org/project/getnit/](https://pypi.org/project/getnit/)
 - **Documentation**: [https://docs.getnit.dev](https://docs.getnit.dev) (coming soon)
-- **Issues**: [https://github.com/getnit/nit/issues](https://github.com/getnit/nit/issues)
+- **Issues**: [https://github.com/getnit-dev/nit/issues](https://github.com/getnit-dev/nit/issues)
 
 ---
 

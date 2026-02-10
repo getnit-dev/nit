@@ -23,7 +23,7 @@ class CaseStatus(Enum):
 
 
 @dataclass
-class TestCaseResult:
+class CaseResult:
     """Result of a single test case execution."""
 
     name: str
@@ -42,7 +42,7 @@ class RunResult:
     skipped: int = 0
     errors: int = 0
     duration_ms: float = 0.0
-    test_cases: list[TestCaseResult] = field(default_factory=list)
+    test_cases: list[CaseResult] = field(default_factory=list)
     raw_output: str = ""
     success: bool = False
 

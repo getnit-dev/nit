@@ -17,9 +17,9 @@ if TYPE_CHECKING:
     from nit.llm.prompts.base import PromptTemplate
 
 from nit.adapters.base import (
+    CaseResult,
     CaseStatus,
     RunResult,
-    TestCaseResult,
     TestFrameworkAdapter,
     ValidationResult,
 )
@@ -236,7 +236,7 @@ def _parse_playwright_json(raw_stdout: str, fallback_output: str) -> RunResult:
                 if not failure_msg and "value" in error:
                     failure_msg = str(error.get("value", ""))
 
-            test_case = TestCaseResult(
+            test_case = CaseResult(
                 name=test.get("title", "unknown"),
                 status=status,
                 duration_ms=test.get("duration", 0.0),

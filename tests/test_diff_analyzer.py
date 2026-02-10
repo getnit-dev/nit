@@ -34,15 +34,15 @@ def temp_git_repo(tmp_path: Path) -> Path:
     repo.mkdir()
 
     # Initialize git repo
-    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)  # noqa: S607
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
     subprocess.run(
-        ["git", "config", "user.email", "test@example.com"],  # noqa: S607
+        ["git", "config", "user.email", "test@example.com"],
         cwd=repo,
         check=True,
         capture_output=True,
     )
     subprocess.run(
-        ["git", "config", "user.name", "Test User"],  # noqa: S607
+        ["git", "config", "user.name", "Test User"],
         cwd=repo,
         check=True,
         capture_output=True,
@@ -51,9 +51,9 @@ def temp_git_repo(tmp_path: Path) -> Path:
     # Create initial commit
     readme = repo / "README.md"
     readme.write_text("# Test Project\n")
-    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)  # noqa: S607
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
     subprocess.run(
-        ["git", "commit", "-m", "Initial commit"],  # noqa: S607
+        ["git", "commit", "-m", "Initial commit"],
         cwd=repo,
         check=True,
         capture_output=True,
@@ -85,9 +85,9 @@ def git_repo_with_files(temp_git_repo: Path) -> Path:
     )
 
     # Commit files
-    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)  # noqa: S607
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
     subprocess.run(
-        ["git", "commit", "-m", "Add source and test files"],  # noqa: S607
+        ["git", "commit", "-m", "Add source and test files"],
         cwd=repo,
         check=True,
         capture_output=True,
@@ -381,7 +381,7 @@ async def test_diff_analyzer_compares_refs(git_repo_with_files: Path) -> None:
     """Test DiffAnalyzer compares between two git refs."""
     # Create a new branch and add changes
     subprocess.run(
-        ["git", "checkout", "-b", "feature"],  # noqa: S607
+        ["git", "checkout", "-b", "feature"],
         cwd=git_repo_with_files,
         check=True,
         capture_output=True,
@@ -389,13 +389,13 @@ async def test_diff_analyzer_compares_refs(git_repo_with_files: Path) -> None:
 
     (git_repo_with_files / "src" / "feature.py").write_text("def feature():\n    pass\n")
     subprocess.run(
-        ["git", "add", "."],  # noqa: S607
+        ["git", "add", "."],
         cwd=git_repo_with_files,
         check=True,
         capture_output=True,
     )
     subprocess.run(
-        ["git", "commit", "-m", "Add feature"],  # noqa: S607
+        ["git", "commit", "-m", "Add feature"],
         cwd=git_repo_with_files,
         check=True,
         capture_output=True,

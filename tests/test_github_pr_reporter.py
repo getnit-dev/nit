@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -14,6 +16,9 @@ from nit.agents.reporters.github_pr import (
 from nit.models.coverage import CoverageReport, PackageCoverage
 from nit.utils.git import GitOperationError
 
+# Get absolute path to git executable for security
+GIT_PATH = shutil.which("git") or "git"
+
 
 @pytest.fixture
 def temp_repo(tmp_path: Path) -> Path:
@@ -24,15 +29,15 @@ def temp_repo(tmp_path: Path) -> Path:
     repo_path.mkdir()
 
     # Initialize git repo
-    subprocess.run(["git", "init"], cwd=repo_path, check=True, capture_output=True)  # noqa: S607
+    subprocess.run(["git", "init"], cwd=repo_path, check=True, capture_output=True)
     subprocess.run(
-        ["git", "config", "user.email", "test@example.com"],  # noqa: S607
+        ["git", "config", "user.email", "test@example.com"],
         cwd=repo_path,
         check=True,
         capture_output=True,
     )
     subprocess.run(
-        ["git", "config", "user.name", "Test User"],  # noqa: S607
+        ["git", "config", "user.name", "Test User"],
         cwd=repo_path,
         check=True,
         capture_output=True,
@@ -41,7 +46,7 @@ def temp_repo(tmp_path: Path) -> Path:
     # Set up remote
     subprocess.run(
         [
-            "git",
+            GIT_PATH,
             "remote",
             "add",
             "origin",
@@ -54,11 +59,9 @@ def temp_repo(tmp_path: Path) -> Path:
 
     # Create initial commit
     (repo_path / "README.md").write_text("# Test Repo")
+    subprocess.run([GIT_PATH, "add", "."], cwd=repo_path, check=True, capture_output=True)
     subprocess.run(
-        ["git", "add", "."], cwd=repo_path, check=True, capture_output=True
-    )
-    subprocess.run(
-        ["git", "commit", "-m", "Initial commit"],  # noqa: S607
+        ["git", "commit", "-m", "Initial commit"],
         cwd=repo_path,
         check=True,
         capture_output=True,
@@ -283,7 +286,7 @@ class TestGitHubPRReporter:
         mock_get_remote.return_value = "https://github.com/test-owner/test-repo.git"
 
         # Mock subprocess calls
-        def subprocess_side_effect(*args, **kwargs):
+        def subprocess_side_effect(*args: Any, **kwargs: Any) -> mock.Mock:
             cmd = args[0] if args else kwargs.get("args", [])
             result = mock.Mock()
             result.returncode = 0
@@ -338,7 +341,7 @@ class TestGitHubPRReporter:
         mock_api_class.return_value = mock_api
 
         # Mock subprocess calls for git operations
-        def subprocess_side_effect(*args, **kwargs):
+        def subprocess_side_effect(*args: Any, **kwargs: Any) -> mock.Mock:
             result = mock.Mock()
             result.returncode = 0
             result.stdout = "abc123\n"
@@ -404,7 +407,7 @@ class TestGitHubPRReporter:
         # Track calls
         calls = []
 
-        def subprocess_side_effect(*args, **kwargs):
+        def subprocess_side_effect(*args: Any, **kwargs: Any) -> mock.Mock:
             cmd = args[0] if args else kwargs.get("args", [])
             calls.append(cmd)
             result = mock.Mock()

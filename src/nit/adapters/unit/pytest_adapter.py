@@ -13,9 +13,9 @@ import tempfile
 from pathlib import Path
 
 from nit.adapters.base import (
+    CaseResult,
     CaseStatus,
     RunResult,
-    TestCaseResult,
     TestFrameworkAdapter,
     ValidationResult,
 )
@@ -278,7 +278,7 @@ def _parse_pytest_json(stdout: str, raw_output: str) -> RunResult:
     skipped = 0
     errors = 0
     duration_ms = 0.0
-    test_cases: list[TestCaseResult] = []
+    test_cases: list[CaseResult] = []
 
     # Use summary for top-level counts if available, but always parse
     # individual tests for detailed results.
@@ -328,7 +328,7 @@ def _parse_pytest_json(stdout: str, raw_output: str) -> RunResult:
             errors += 1
 
         test_cases.append(
-            TestCaseResult(
+            CaseResult(
                 name=nodeid,
                 status=tc_status,
                 duration_ms=tc_duration_ms,

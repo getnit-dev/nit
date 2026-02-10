@@ -14,9 +14,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from nit.adapters.base import (
+    CaseResult,
     CaseStatus,
     RunResult,
-    TestCaseResult,
     TestFrameworkAdapter,
     ValidationResult,
 )
@@ -505,7 +505,7 @@ def _parse_catch2_junit(xml_text: str, raw_output: str) -> RunResult:
             result.passed += 1
 
         result.test_cases.append(
-            TestCaseResult(
+            CaseResult(
                 name=full_name,
                 status=status,
                 duration_ms=duration_ms,

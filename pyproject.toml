@@ -48,8 +48,8 @@ nit = "nit.cli:cli"
 
 [project.urls]
 Homepage = "https://getnit.dev"
-Repository = "https://github.com/getnit/nit"
-Issues = "https://github.com/getnit/nit/issues"
+Repository = "https://github.com/getnit-dev/nit"
+Issues = "https://github.com/getnit-dev/nit/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/nit"]
@@ -95,6 +95,8 @@ select = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = [
     "S101",    # assert is fine in tests
+    "S603",    # subprocess calls are needed for test fixtures
+    "S607",    # subprocess calls are needed for test fixtures
     "PLR2004", # magic values fine in tests
     "ARG",     # unused args fine in tests (fixtures)
     "TCH003",  # stdlib imports used at runtime in fixtures

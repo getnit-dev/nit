@@ -25,7 +25,7 @@ from nit.agents.analyzers.integration_deps import (
 )
 from nit.agents.base import BaseAgent, TaskInput, TaskOutput, TaskStatus
 from nit.agents.builders.unit import BuildTask, FailureType, ValidationAttempt
-from nit.llm.context import AssembledContext, ContextAssembler
+from nit.llm.context import ContextAssembler
 from nit.llm.engine import GenerationRequest, LLMError, LLMMessage
 from nit.llm.prompts.integration_test import (
     IntegrationTestTemplate,
@@ -280,28 +280,8 @@ class IntegrationBuilder(BaseAgent):
                 ),
             )
 
-        except ValueError as exc:
-            logger.error("Invalid input: %s", exc)
-            return TaskOutput(
-                status=TaskStatus.FAILED,
-                errors=[f"Invalid input: {exc}"],
-            )
-
-        except LLMError as exc:
-            logger.error("LLM error: %s", exc)
-            if self._memory:
-                self._memory.update_stats(successful=False)
-            return TaskOutput(
-                status=TaskStatus.FAILED,
-                errors=[f"LLM error: {exc}"],
-            )
-
-        except Exception as exc:
-            logger.exception("Unexpected error during integration test generation")
-            return TaskOutput(
-                status=TaskStatus.FAILED,
-                errors=[f"Unexpected error: {exc}"],
-            )
+        except (ValueError, LLMError, Exception) as exc:
+            return self._handle_generation_error(exc)
 
     def _resolve_path(self, path: str) -> Path:
         """Resolve a path string to an absolute Path relative to project root."""
@@ -309,6 +289,32 @@ class IntegrationBuilder(BaseAgent):
         if p.is_absolute():
             return p
         return self._root / p
+
+    def _handle_generation_error(self, exc: Exception) -> TaskOutput:
+        """Handle errors during test generation and return appropriate TaskOutput.
+
+        Args:
+            exc: The exception that occurred.
+
+        Returns:
+            TaskOutput with FAILED status and error message.
+        """
+        if isinstance(exc, ValueError):
+            logger.error("Invalid input: %s", exc)
+            error_msg = f"Invalid input: {exc}"
+        elif isinstance(exc, LLMError):
+            logger.error("LLM error: %s", exc)
+            if self._memory:
+                self._memory.update_stats(successful=False)
+            error_msg = f"LLM error: {exc}"
+        else:
+            logger.exception("Unexpected error during integration test generation")
+            error_msg = f"Unexpected error: {exc}"
+
+        return TaskOutput(
+            status=TaskStatus.FAILED,
+            errors=[error_msg],
+        )
 
     def _add_integration_info_to_prompt(
         self,
