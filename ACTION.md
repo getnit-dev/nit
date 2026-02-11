@@ -151,10 +151,6 @@ Generate/update documentation
 - Updates README files
 - Generates test reports
 
-## Examples
-
-See [.github/workflows/nit.yml.example](.github/workflows/nit.yml.example) for more comprehensive examples.
-
 ## Support
 
 - **Documentation**: https://getnit.dev

@@ -15,6 +15,7 @@ from nit.agents.base import BaseAgent, TaskInput, TaskOutput, TaskStatus
 from nit.agents.detectors.signals import (
     CMakePattern,
     ConfigFile,
+    CsprojDependency,
     Dependency,
     DetectedFramework,
     FilePattern,
@@ -212,9 +213,104 @@ def _cpp_rules() -> list[FrameworkRule]:
     ]
 
 
+def _go_rules() -> list[FrameworkRule]:
+    """Detection rules for Go frameworks."""
+    return [
+        # ── Go stdlib testing ──
+        FrameworkRule(
+            name="gotest",
+            language="go",
+            category=FrameworkCategory.UNIT_TEST,
+            signals=[
+                ConfigFile("go.mod"),
+                FilePattern("**/*_test.go"),
+            ],
+        ),
+        # ── Testify ──
+        FrameworkRule(
+            name="testify",
+            language="go",
+            category=FrameworkCategory.UNIT_TEST,
+            signals=[
+                ConfigFile("go.mod"),
+                Dependency("github.com/stretchr/testify"),
+                ImportPattern(r'''"github\.com/stretchr/testify"'''),
+                ImportPattern(r'''"github\.com/stretchr/testify/assert"'''),
+                ImportPattern(r'''"github\.com/stretchr/testify/suite"'''),
+                FilePattern("**/*_test.go"),
+            ],
+        ),
+    ]
+
+
+def _java_rules() -> list[FrameworkRule]:
+    """Detection rules for Java frameworks."""
+    return [
+        # ── JUnit 5 ──
+        FrameworkRule(
+            name="junit5",
+            language="java",
+            category=FrameworkCategory.UNIT_TEST,
+            signals=[
+                ConfigFile("build.gradle"),
+                ConfigFile("build.gradle.kts"),
+                ConfigFile("pom.xml"),
+                Dependency("junit-jupiter", dev_only=True),
+                Dependency("org.junit.jupiter", dev_only=True),
+                ImportPattern(r"import\s+org\.junit\.jupiter"),
+                FilePattern("**/*Test.java"),
+                FilePattern("**/Test*.java"),
+            ],
+        ),
+    ]
+
+
+def _csharp_rules() -> list[FrameworkRule]:
+    """Detection rules for C#/.NET frameworks."""
+    return [
+        # ── xUnit ──
+        FrameworkRule(
+            name="xunit",
+            language="csharp",
+            category=FrameworkCategory.UNIT_TEST,
+            signals=[
+                CsprojDependency("xunit"),
+                ImportPattern(r"using\s+Xunit\s*;"),
+                FilePattern("**/*Tests.cs"),
+                FilePattern("**/*Test.cs"),
+            ],
+        ),
+    ]
+
+
+def _rust_rules() -> list[FrameworkRule]:
+    """Detection rules for Rust frameworks."""
+    return [
+        # ── cargo test ──
+        FrameworkRule(
+            name="cargo_test",
+            language="rust",
+            category=FrameworkCategory.UNIT_TEST,
+            signals=[
+                ConfigFile("Cargo.toml"),
+                FilePattern("**/tests/*.rs"),
+                FilePattern("**/*.rs"),
+            ],
+        ),
+    ]
+
+
 def builtin_rules() -> list[FrameworkRule]:
     """Return all built-in framework detection rules."""
-    return [*_js_ts_rules(), *_python_rules(), *_cpp_rules()]
+    return [
+        *_js_ts_rules(),
+        *_python_rules(),
+        *_cpp_rules(),
+        *_go_rules(),
+        *_java_rules(),
+        *_csharp_rules(),
+        *_rust_rules(),
+    ]
 
 
 # ── Manifest helpers ────────────────────────────────────────────────
@@ -230,6 +326,10 @@ class _ProjectFiles:
     package_json: dict[str, Any] = field(default_factory=dict)
     pyproject_toml_text: str = ""
     requirements_txt_lines: list[str] = field(default_factory=list)
+    go_mod_text: str = ""
+    build_gradle_text: str = ""
+    pom_xml_text: str = ""
+    csproj_text: str = ""
     source_snippets: dict[str, str] = field(default_factory=dict)
 
 
@@ -253,6 +353,7 @@ def _scan_project(root: Path, skip_dirs: frozenset[str]) -> _ProjectFiles:
                 ".tsx",
                 ".mjs",
                 ".cjs",
+                ".go",
                 ".cpp",
                 ".cc",
                 ".cxx",
@@ -260,6 +361,9 @@ def _scan_project(root: Path, skip_dirs: frozenset[str]) -> _ProjectFiles:
                 ".hpp",
                 ".hh",
                 ".hxx",
+                ".java",
+                ".kt",
+                ".cs",
             }
             or child.name == "CMakeLists.txt"
         ):
@@ -268,6 +372,20 @@ def _scan_project(root: Path, skip_dirs: frozenset[str]) -> _ProjectFiles:
                     encoding="utf-8",
                     errors="replace",
                 )[:8192]
+
+    # Read Gradle build files (root only)
+    for gradle_name in ("build.gradle", "build.gradle.kts"):
+        gradle_path = root / gradle_name
+        if gradle_path.is_file():
+            with contextlib.suppress(OSError):
+                pf.build_gradle_text = gradle_path.read_text(encoding="utf-8", errors="replace")
+            break
+
+    # Read Maven pom.xml (root only)
+    pom_path = root / "pom.xml"
+    if pom_path.is_file():
+        with contextlib.suppress(OSError):
+            pf.pom_xml_text = pom_path.read_text(encoding="utf-8", errors="replace")
 
     # Parse package.json
     pkg_path = root / "package.json"
@@ -280,6 +398,22 @@ def _scan_project(root: Path, skip_dirs: frozenset[str]) -> _ProjectFiles:
     if pyproject_path.is_file():
         with contextlib.suppress(OSError):
             pf.pyproject_toml_text = pyproject_path.read_text(encoding="utf-8")
+
+    # Read go.mod for Go dependency matching
+    go_mod_path = root / "go.mod"
+    if go_mod_path.is_file():
+        with contextlib.suppress(OSError):
+            pf.go_mod_text = go_mod_path.read_text(encoding="utf-8")
+
+    # Collect .csproj content for NuGet dependency matching
+    csproj_parts: list[str] = []
+    for rel in pf.relative_paths:
+        if rel.endswith(".csproj"):
+            with contextlib.suppress(OSError):
+                csproj_parts.append(
+                    (root / rel).read_text(encoding="utf-8", errors="replace"),
+                )
+    pf.csproj_text = "\n".join(csproj_parts)
 
     # Read requirements files
     for req_name in ("requirements.txt", "requirements-dev.txt", "requirements_dev.txt"):
@@ -318,7 +452,7 @@ def _match_config_file(signal: ConfigFile, pf: _ProjectFiles) -> bool:
 
 
 def _match_dependency(signal: Dependency, pf: _ProjectFiles) -> bool:
-    """Check package.json deps, pyproject.toml, or requirements.txt."""
+    """Check package.json, pyproject.toml, requirements.txt, go.mod, Gradle, or Maven."""
     # JS/TS: check package.json
     if pf.package_json:
         for section in ("devDependencies", "dependencies"):
@@ -340,7 +474,25 @@ def _match_dependency(signal: Dependency, pf: _ProjectFiles) -> bool:
         if pkg.lower() == signal.name.lower():
             return True
 
-    return False
+    # Go: check go.mod require/replace blocks for module path
+    if pf.go_mod_text and "/" in signal.name and signal.name in pf.go_mod_text:
+        return True
+
+    # Java: check Gradle (testImplementation / implementation)
+    if pf.build_gradle_text and re.search(
+        rf"junit-jupiter|org\.junit\.jupiter|{re.escape(signal.name)}",
+        pf.build_gradle_text,
+    ):
+        return True
+
+    # Java: check Maven pom.xml
+    return bool(
+        pf.pom_xml_text
+        and re.search(
+            rf"junit-jupiter|org\.junit\.jupiter|{re.escape(signal.name)}",
+            pf.pom_xml_text,
+        )
+    )
 
 
 def _match_import_pattern(signal: ImportPattern, pf: _ProjectFiles) -> bool:
@@ -386,8 +538,21 @@ def _match_package_json_field(signal: PackageJsonField, pf: _ProjectFiles) -> bo
     return False
 
 
+def _match_csproj_dependency(signal: CsprojDependency, pf: _ProjectFiles) -> bool:
+    """Check .csproj content for PackageReference Include=\"*name*\"."""
+    if not pf.csproj_text:
+        return False
+    # Match PackageReference Include="xunit" or Include='xunit'
+    pattern = re.compile(
+        rf'PackageReference\s+Include\s*=\s*["\']([^"\']*{re.escape(signal.name)}[^"\']*)["\']',
+        re.IGNORECASE,
+    )
+    return bool(pattern.search(pf.csproj_text))
+
+
 _MATCHERS: dict[type[Signal], Callable[..., bool]] = {
     ConfigFile: _match_config_file,
+    CsprojDependency: _match_csproj_dependency,
     Dependency: _match_dependency,
     ImportPattern: _match_import_pattern,
     FilePattern: _match_file_pattern,

@@ -314,38 +314,38 @@
 
 ### 3.3 C/C++ — CMake Integration (Weeks 9–10) `[P with 3.1, 3.2]`
 
-- [ ] **3.3.1** Implement CMakeLists.txt parsing: detect existing test targets, include directories, linked libraries
-- [ ] **3.3.2** Implement automatic CMakeLists.txt modification: add new test targets for generated test files (add_executable + target_link_libraries + gtest_discover_tests)
-- [ ] **3.3.3** Write tests for CMake integration
+- [x] **3.3.1** Implement CMakeLists.txt parsing: detect existing test targets, include directories, linked libraries
+- [x] **3.3.2** Implement automatic CMakeLists.txt modification: add new test targets for generated test files (add_executable + target_link_libraries + gtest_discover_tests)
+- [x] **3.3.3** Write tests for CMake integration
 
 ### 3.4 C/C++ — Coverage (Weeks 9–10) `[P with 3.3]`
 
-- [ ] **3.4.1** Implement `GcovAdapter` (`adapters/coverage/gcov.py`): run gcov/lcov, parse coverage data into unified `CoverageReport`
-- [ ] **3.4.2** Support both gcov and llvm-cov output formats
-- [ ] **3.4.3** Write tests for gcov coverage parsing
+- [x] **3.4.1** Implement `GcovAdapter` (`adapters/coverage/gcov.py`): run gcov/lcov, parse coverage data into unified `CoverageReport`
+- [x] **3.4.2** Support both gcov and llvm-cov output formats
+- [x] **3.4.3** Write tests for gcov coverage parsing
 
 ### 3.5 Go Adapter (Weeks 9–10) `[P with 3.1]`
 
-- [ ] **3.5.1** Implement `GoTestAdapter` (`adapters/unit/go_test.py`): detection (`*_test.go` files, `go.mod`), test execution (`go test ./...`)
-- [ ] **3.5.2** Implement Go test prompt template: table-driven tests, `t.Run()` subtests, `testify` assertions (if detected)
-- [ ] **3.5.3** Implement `TestifyAdapter` (`adapters/unit/testify.py`): detection (`github.com/stretchr/testify` in go.mod), suite-based and assert-based patterns
-- [ ] **3.5.4** Implement `GoCovertAdapter` (`adapters/coverage/go_cover.py`): run `go test -cover -coverprofile`, parse into unified report
-- [ ] **3.5.5** Write tests for Go adapters with sample Go project
+- [x] **3.5.1** Implement `GoTestAdapter` (`adapters/unit/go_test_adapter.py`): detection (`*_test.go` files, `go.mod`), test execution (`go test -json ./...`)
+- [x] **3.5.2** Implement Go test prompt template (`llm/prompts/go_test_prompt.py`): table-driven tests, `t.Run()` subtests, `testify` assertions (if detected)
+- [x] **3.5.3** Implement `TestifyAdapter` (`adapters/unit/testify_adapter.py`): detection (`github.com/stretchr/testify` in go.mod), suite-based and assert-based patterns
+- [x] **3.5.4** Implement `GoCoverAdapter` (`adapters/coverage/go_cover_adapter.py`): run `go test -cover -coverprofile`, parse into unified report
+- [x] **3.5.5** Write tests for Go adapters with sample Go project
 
 ### 3.6 Java Adapter (Weeks 11–12)
 
-- [ ] **3.6.1** Implement `JUnit5Adapter` (`adapters/unit/junit5.py`): detection (Gradle/Maven deps for `org.junit.jupiter`), test execution (`./gradlew test` or `mvn test`)
-- [ ] **3.6.2** Implement JUnit 5 prompt template: `@Test`, `@BeforeEach`, `@DisplayName`, `Assertions.*` patterns
-- [ ] **3.6.3** Implement Gradle integration: parse `build.gradle(.kts)` for test dependencies, source sets
-- [ ] **3.6.4** Implement Maven integration: parse `pom.xml` for test dependencies, surefire plugin config
-- [ ] **3.6.5** Implement `JaCoCoAdapter` (`adapters/coverage/jacoco.py`): parse JaCoCo XML report into unified format
-- [ ] **3.6.6** Write tests for Java adapters with sample Gradle and Maven projects
+- [x] **3.6.1** Implement `JUnit5Adapter` (`adapters/unit/junit5_adapter.py`): detection (Gradle/Maven deps for `org.junit.jupiter`), test execution (`./gradlew test` or `mvn test`)
+- [x] **3.6.2** Implement JUnit 5 prompt template (`llm/prompts/junit5_prompt.py`): `@Test`, `@BeforeEach`, `@DisplayName`, `Assertions.*` patterns
+- [x] **3.6.3** Implement Gradle integration: parse `build.gradle(.kts)` for test dependencies, source sets (detection + execution in JUnit5Adapter)
+- [x] **3.6.4** Implement Maven integration: parse `pom.xml` for test dependencies, surefire plugin config (detection + execution in JUnit5Adapter)
+- [x] **3.6.5** Implement `JaCoCoAdapter` (`adapters/coverage/jacoco.py`): parse JaCoCo XML report into unified format
+- [x] **3.6.6** Write tests for Java adapters with sample Gradle and Maven projects (`tests/test_junit5_adapter.py`, `tests/test_jacoco_adapter.py`)
 
 ### 3.7 Kotlin Adapter (Weeks 11–12) `[P with 3.6]`
 
-- [ ] **3.7.1** Implement `KotestAdapter` (`adapters/unit/kotest.py`): detection (`io.kotest` deps), prompt template with Kotest DSL patterns
-- [ ] **3.7.2** Support Kotlin running on JUnit 5 via `junit5.py` adapter (Kotlin compiles to JVM, same execution path)
-- [ ] **3.7.3** Write tests for Kotlin adapter
+- [x] **3.7.1** Implement `KotestAdapter` (`adapters/unit/kotest_adapter.py`): detection (`io.kotest` deps), prompt template with Kotest DSL patterns
+- [x] **3.7.2** Support Kotlin running on JUnit 5 via `junit5.py` adapter (Kotlin compiles to JVM, same execution path)
+- [x] **3.7.3** Write tests for Kotlin adapter
 
 ### 3.8 CLI Tool Integration (Weeks 11–12) `[P with 3.6]`
 
@@ -447,31 +447,32 @@
 
 ### 4.6 README Auto-Update (Weeks 15–16) `[P with 4.5]`
 
-- [ ] **4.6.1** Implement README update detection: monitor project structure changes (new packages, changed exports, new CLI commands)
-- [ ] **4.6.2** Generate README section updates via LLM: installation instructions, API overview, project structure
-- [ ] **4.6.3** Write tests for README auto-update
+- [x] **4.6.1** Implement README update detection: monitor project structure changes (new packages, changed exports, new CLI commands)
+- [x] **4.6.2** Generate README section updates via LLM: installation instructions, API overview, project structure
+- [x] **4.6.3** Write tests for README auto-update
+- [x] **4.6.4** Implement `nit docs --readme` command for manually-triggered README updates (or README.md - detect the name)
 
 ### 4.7 Changelog Generation (Weeks 15–16) `[P with 4.6]`
 
-- [ ] **4.7.1** Implement changelog generation from git history: parse commits between tags, group by type (feat, fix, refactor, etc.)
-- [ ] **4.7.2** Use LLM to generate human-readable changelog entries from commit messages + diffs
-- [ ] **4.7.3** Output in Keep a Changelog format (`CHANGELOG.md`)
-- [ ] **4.7.4** Implement `nit docs --changelog <tag>` command
-- [ ] **4.7.5** Write tests for changelog generation
+- [x] **4.7.1** Implement changelog generation from git history: parse commits between tags, group by type (feat, fix, refactor, etc.)
+- [x] **4.7.2** Use LLM to generate human-readable changelog entries from commit messages + diffs
+- [x] **4.7.3** Output in Keep a Changelog format (`CHANGELOG.md`)
+- [x] **4.7.4** Implement `nit docs --changelog <tag>` command
+- [x] **4.7.5** Write tests for changelog generation
 
 ### 4.8 Rust Adapter (Week 17)
 
-- [ ] **4.8.1** Implement `CargoTestAdapter` (`adapters/unit/cargo_test.py`): detection (`Cargo.toml`, `#[test]` attributes), test execution (`cargo test`), result parsing
-- [ ] **4.8.2** Implement Rust test prompt template: `#[test]` functions, `assert_eq!`/`assert!` macros, module-level `#[cfg(test)]` blocks
-- [ ] **4.8.3** Implement `TarpaulinAdapter` (`adapters/coverage/tarpaulin.py`): run `cargo tarpaulin`, parse coverage output
-- [ ] **4.8.4** Write tests for Rust adapters
+- [x] **4.8.1** Implement `CargoTestAdapter` (`adapters/unit/cargo_test_adapter.py`): detection (`Cargo.toml`, `#[test]` attributes), test execution (`cargo test`), result parsing
+- [x] **4.8.2** Implement Rust test prompt template: `#[test]` functions, `assert_eq!`/`assert!` macros, module-level `#[cfg(test)]` blocks
+- [x] **4.8.3** Implement `TarpaulinAdapter` (`adapters/coverage/tarpaulin.py`): run `cargo tarpaulin`, parse coverage output
+- [x] **4.8.4** Write tests for Rust adapters
 
 ### 4.9 C#/.NET Adapter (Week 17) `[P with 4.8]`
 
-- [ ] **4.9.1** Implement `XUnitAdapter` (`adapters/unit/xunit.py`): detection (NuGet `xunit` dep, `using Xunit`), test execution (`dotnet test`), result parsing (TRX format)
-- [ ] **4.9.2** Implement xUnit prompt template: `[Fact]`, `[Theory]`, `[InlineData]`, `Assert.*` patterns
-- [ ] **4.9.3** Implement `CoverletAdapter` (`adapters/coverage/coverlet.py`): parse Coverlet JSON/Cobertura XML into unified format
-- [ ] **4.9.4** Write tests for C#/.NET adapters
+- [x] **4.9.1** Implement `XUnitAdapter` (`adapters/unit/xunit_adapter.py`): detection (NuGet `xunit` dep, `using Xunit`), test execution (`dotnet test`), result parsing (TRX format)
+- [x] **4.9.2** Implement xUnit prompt template: `[Fact]`, `[Theory]`, `[InlineData]`, `Assert.*` patterns
+- [x] **4.9.3** Implement `CoverletAdapter` (`adapters/coverage/coverlet_adapter.py`): parse Coverlet Cobertura XML into unified format
+- [x] **4.9.4** Write tests for C#/.NET adapters
 
 ### 4.10 Plugin System Formalization (Week 17) `[P with 4.9]`
 
@@ -513,12 +514,12 @@
 
 ### 4.13 Additional Workspace Support (Week 20) `[P with 4.12]`
 
-- [ ] **4.13.1** Implement Cargo workspace detection: parse `Cargo.toml` `[workspace]` members
-- [ ] **4.13.2** Implement Go workspace detection: parse `go.work` use directives
-- [ ] **4.13.3** Implement Gradle multi-project detection: parse `settings.gradle(.kts)` include statements
-- [ ] **4.13.4** Implement Maven multi-module detection: parse parent `pom.xml` `<modules>` section
-- [ ] **4.13.5** Implement Bazel workspace detection: parse `WORKSPACE` / `BUILD` files
-- [ ] **4.13.6** Write tests for each workspace detector
+- [x] **4.13.1** Implement Cargo workspace detection: parse `Cargo.toml` `[workspace]` members
+- [x] **4.13.2** Implement Go workspace detection: parse `go.work` use directives
+- [x] **4.13.3** Implement Gradle multi-project detection: parse `settings.gradle(.kts)` include statements
+- [x] **4.13.4** Implement Maven multi-module detection: parse parent `pom.xml` `<modules>` section
+- [x] **4.13.5** Implement Bazel workspace detection: parse `WORKSPACE` / `BUILD` files
+- [x] **4.13.6** Write tests for each workspace detector
 
 ### 4.14 Notification Integrations (Week 19–20) `[P with 4.12]`
 
@@ -563,11 +564,11 @@
 
 ### 5.1 Hono API Worker
 
-- [ ] **5.1.1** Set up Hono project in `src/worker/` (within `~/platform`): TypeScript, Cloudflare Worker bindings (D1, KV, R2, Queues, AI Gateway)
-- [ ] **5.1.2** Configure `wrangler.jsonc`: D1 database, KV namespace, R2 bucket, Queue producer/consumer, AI Gateway binding, Cron Triggers, Workers Static Assets
-- [ ] **5.1.3** Implement CORS middleware for SPA (`/api/*` routes, allow `getnit.dev` + `localhost:5173`)
-- [ ] **5.1.4** Implement session auth middleware (`middleware/auth.ts`): validate Better Auth session for dashboard routes
-- [ ] **5.1.5** Implement virtual key middleware (`middleware/api-key.ts`): validate platform virtual key against D1 `virtual_keys` table, resolve user/project, check budget + rate limits (KV)
+- [x] **5.1.1** Set up Hono project in `src/worker/` (within `~/platform`): TypeScript, Cloudflare Worker bindings (D1, KV, R2, Queues, AI Gateway)
+- [x] **5.1.2** Configure `wrangler.jsonc`: D1 database, KV namespace, R2 bucket, Queue producer/consumer, AI Gateway binding, Cron Triggers, Workers Static Assets
+- [x] **5.1.3** Implement CORS middleware for SPA (`/api/*` routes, allow `getnit.dev` + `localhost:5173`)
+- [x] **5.1.4** Implement session auth middleware (`middleware/auth.ts`): validate Better Auth session for dashboard routes
+- [x] **5.1.5** Implement virtual key middleware (`middleware/api-key.ts`): validate platform virtual key against D1 `virtual_keys` table, resolve user/project, check budget + rate limits (KV)
 
 ### 5.2 Database Schema (D1 + Drizzle) `[P with 5.1]`
 

@@ -10,14 +10,13 @@ import hashlib
 import logging
 import os
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 import requests
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -462,6 +461,83 @@ class GitOperationError(Exception):
     """Exception raised when git operations fail."""
 
 
+@dataclass
+class CommitInfo:
+    """A single commit from git history."""
+
+    sha: str
+    """Full commit SHA."""
+
+    subject: str
+    """First line of the commit message."""
+
+    body: str
+    """Rest of the commit message (may be empty)."""
+
+
+def get_commits_between(
+    repo_path: Path | str,
+    from_ref: str,
+    to_ref: str = "HEAD",
+) -> list[CommitInfo]:
+    """List commits between two refs (exclusive of from_ref, inclusive of to_ref).
+
+    Uses ``git log from_ref..to_ref`` so commits reachable from to_ref but
+    not from from_ref are returned (newest first).
+
+    Args:
+        repo_path: Path to git repository.
+        from_ref: Older ref (e.g. a tag like v1.0.0).
+        to_ref: Newer ref (default HEAD).
+
+    Returns:
+        List of CommitInfo, newest first.
+
+    Raises:
+        GitOperationError: If the operation fails.
+    """
+    if "\n" in from_ref or "\0" in from_ref or "\n" in to_ref or "\0" in to_ref:
+        raise GitOperationError("Git ref must not contain newline or null")
+    path = Path(repo_path)
+    git_cmd = shutil.which("git") or "git"
+    try:
+        result = subprocess.run(
+            [
+                git_cmd,
+                "log",
+                "--format=%H%n%s%n%b%n---COMMIT_END---",
+                f"{from_ref}..{to_ref}",
+            ],
+            cwd=path,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        msg = f"Failed to get commits between {from_ref} and {to_ref}: {exc}"
+        raise GitOperationError(msg) from exc
+
+    commits: list[CommitInfo] = []
+    block = result.stdout.strip()
+    if not block:
+        return commits
+
+    _sha_idx = 0
+    _subject_idx = 1
+    _body_start_idx = 2
+    for raw in block.split("---COMMIT_END---"):
+        part = raw.strip()
+        if not part:
+            continue
+        lines = part.split("\n")
+        sha = lines[_sha_idx].strip()
+        subject = lines[_subject_idx].strip() if len(lines) > _subject_idx else ""
+        body = "\n".join(lines[_body_start_idx:]).strip() if len(lines) > _body_start_idx else ""
+        commits.append(CommitInfo(sha=sha, subject=subject, body=body))
+
+    return commits
+
+
 def get_current_branch(repo_path: Path) -> str:
     """Get the current git branch name.
 
@@ -503,7 +579,7 @@ def create_branch(repo_path: Path, branch_name: str, *, base: str | None = None)
         if base:
             cmd.append(base)
 
-        subprocess.run(  # noqa: S603
+        subprocess.run(
             cmd,
             cwd=repo_path,
             capture_output=True,
@@ -526,7 +602,7 @@ def add_files(repo_path: Path, files: list[str]) -> None:
         GitOperationError: If the operation fails.
     """
     try:
-        subprocess.run(  # noqa: S603
+        subprocess.run(
             ["git", "add", *files],  # noqa: S607
             cwd=repo_path,
             capture_output=True,
@@ -553,7 +629,7 @@ def commit(repo_path: Path, message: str) -> str:
     """
     try:
         # Commit the changes
-        subprocess.run(  # noqa: S603
+        subprocess.run(
             ["git", "commit", "-m", message],  # noqa: S607
             cwd=repo_path,
             capture_output=True,
@@ -592,7 +668,7 @@ def push_branch(repo_path: Path, branch_name: str, *, force: bool = False) -> No
         if force:
             cmd.append("--force")
 
-        subprocess.run(  # noqa: S603
+        subprocess.run(
             cmd,
             cwd=repo_path,
             capture_output=True,

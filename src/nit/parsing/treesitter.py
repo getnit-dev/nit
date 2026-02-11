@@ -34,6 +34,7 @@ EXTENSION_TO_LANGUAGE: dict[str, str] = {
     ".java": "java",
     ".go": "go",
     ".rs": "rust",
+    ".cs": "csharp",
 }
 
 SUPPORTED_LANGUAGES = frozenset(
@@ -47,6 +48,7 @@ SUPPORTED_LANGUAGES = frozenset(
         "java",
         "go",
         "rust",
+        "csharp",
     }
 )
 

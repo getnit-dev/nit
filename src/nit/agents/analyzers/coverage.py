@@ -19,7 +19,13 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from nit.adapters.coverage import CoveragePyAdapter, IstanbulAdapter
+from nit.adapters.coverage import (
+    CoveragePyAdapter,
+    GcovAdapter,
+    GoCoverAdapter,
+    IstanbulAdapter,
+    JaCoCoAdapter,
+)
 from nit.agents.base import BaseAgent, TaskInput, TaskOutput, TaskStatus
 from nit.agents.builders.unit import BuildTask
 from nit.parsing.languages import extract_from_file
@@ -188,6 +194,9 @@ class CoverageAnalyzer(BaseAgent):
         self._coverage_adapters: list[CoverageAdapter] = [
             CoveragePyAdapter(),
             IstanbulAdapter(),
+            GcovAdapter(),
+            GoCoverAdapter(),
+            JaCoCoAdapter(),
         ]
 
     @property

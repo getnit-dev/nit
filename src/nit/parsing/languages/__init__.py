@@ -11,6 +11,7 @@ from pathlib import Path
 
 from nit.parsing.languages.base import LanguageExtractor
 from nit.parsing.languages.c import CExtractor, CppExtractor
+from nit.parsing.languages.csharp import CSharpExtractor
 from nit.parsing.languages.go import GoExtractor
 from nit.parsing.languages.java import JavaExtractor
 from nit.parsing.languages.javascript import (
@@ -29,6 +30,7 @@ _EXTRACTORS: dict[str, type[LanguageExtractor]] = {
     "tsx": TSXExtractor,
     "c": CExtractor,
     "cpp": CppExtractor,
+    "csharp": CSharpExtractor,
     "java": JavaExtractor,
     "go": GoExtractor,
     "rust": RustExtractor,
@@ -63,6 +65,7 @@ def extract_from_file(file_path: str) -> ParseResult:
 
 __all__ = [
     "CExtractor",
+    "CSharpExtractor",
     "CppExtractor",
     "GoExtractor",
     "JavaExtractor",

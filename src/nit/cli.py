@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 import sys
@@ -11,7 +12,7 @@ import traceback
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict, Unpack
 
 import click
 import yaml
@@ -23,20 +24,27 @@ from nit.adapters.base import CaseStatus, RunResult, TestFrameworkAdapter
 from nit.adapters.registry import get_registry
 from nit.agents.analyzers.diff import DiffAnalysisResult, DiffAnalysisTask, DiffAnalyzer
 from nit.agents.base import TaskStatus
+from nit.agents.builders.readme import ReadmeUpdater
 from nit.agents.detectors.framework import detect_frameworks, needs_llm_fallback
 from nit.agents.detectors.signals import FrameworkCategory, FrameworkProfile
 from nit.agents.detectors.stack import detect_languages
 from nit.agents.detectors.workspace import detect_workspace
 from nit.agents.reporters.terminal import reporter
 from nit.config import load_config, validate_config
+from nit.llm.config import load_llm_config
+from nit.llm.factory import create_engine
 from nit.models.profile import ProjectProfile
 from nit.models.store import is_profile_stale, load_profile, save_profile
+from nit.utils.changelog import ChangelogGenerator
+from nit.utils.git import GitOperationError
 from nit.utils.platform_client import (
     PlatformClientError,
     PlatformRuntimeConfig,
     post_platform_report,
 )
+from nit.utils.readme import find_readme
 
+logger = logging.getLogger(__name__)
 console = Console()
 
 # CLI display constants
@@ -1085,7 +1093,163 @@ def drift() -> None:
     click.echo("nit drift — not yet implemented")
 
 
+def _docs_changelog(
+    path: str,
+    from_tag: str,
+    output_path: str | None,
+    *,
+    use_llm: bool,
+) -> None:
+    """Generate CHANGELOG.md from git history since the given tag."""
+    root = Path(path).resolve()
+    out_file = Path(output_path) if output_path else root / "CHANGELOG.md"
+
+    llm_engine = None
+    if use_llm:
+        try:
+            config = load_config(path)
+            if _is_llm_runtime_configured(config):
+                llm_config = load_llm_config(path)
+                llm_engine = create_engine(llm_config)
+        except Exception as e:
+            logger.debug("LLM not available for changelog polish: %s", e)
+
+    generator = ChangelogGenerator(
+        repo_path=root,
+        from_ref=from_tag,
+        to_ref="HEAD",
+        use_llm=use_llm,
+        llm_engine=llm_engine,
+    )
+    markdown = generator.generate()
+    out_file.write_text(markdown, encoding="utf-8")
+    reporter.print_success(f"Wrote {out_file}")
+
+
+class DocsOptions(TypedDict):
+    """Options for the docs command (Click passes these as keyword args)."""
+
+    path: str
+    changelog_tag: str | None
+    changelog_output: str | None
+    changelog_no_llm: bool
+    readme: bool
+    write: bool
+
+
 @cli.command()
-def docs() -> None:
-    """Generate/update documentation."""
-    click.echo("nit docs — not yet implemented")
+@click.option(
+    "--path",
+    default=".",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    help="Project root directory.",
+)
+@click.option(
+    "--changelog",
+    "changelog_tag",
+    type=str,
+    default=None,
+    metavar="TAG",
+    help="Generate CHANGELOG.md from git history since tag (e.g. v1.0.0).",
+)
+@click.option(
+    "--output",
+    "changelog_output",
+    type=click.Path(dir_okay=False, resolve_path=True),
+    default=None,
+    help="Output file for changelog (default: CHANGELOG.md in project root).",
+)
+@click.option(
+    "--no-llm",
+    "changelog_no_llm",
+    is_flag=True,
+    help="Skip LLM polish for changelog entries (use raw commit messages).",
+)
+@click.option(
+    "--readme",
+    is_flag=True,
+    help="Update README (installation, project structure, usage) via LLM.",
+)
+@click.option(
+    "--write",
+    is_flag=True,
+    help="Write generated README content to the README file (use with --readme).",
+)
+def docs(**opts: Unpack[DocsOptions]) -> None:
+    """Generate/update documentation.
+
+    Use --changelog <tag> to generate CHANGELOG.md from git history since that tag.
+    Use --readme to generate README section updates from project structure.
+    Use --write with --readme to write the result to the README file.
+    """
+    path = opts["path"]
+    changelog_tag = opts["changelog_tag"]
+    changelog_output = opts["changelog_output"]
+    changelog_no_llm = opts["changelog_no_llm"]
+    readme = opts["readme"]
+    write = opts["write"]
+    if changelog_tag is not None:
+        try:
+            _docs_changelog(
+                path,
+                changelog_tag,
+                changelog_output,
+                use_llm=not changelog_no_llm,
+            )
+        except GitOperationError as e:
+            reporter.print_error(str(e))
+            raise click.Abort from e
+        return
+    if not readme:
+        click.echo("nit docs — use --changelog <tag> or --readme, or run another doc target.")
+        return
+    _docs_readme(path, write=write)
+
+
+def _docs_readme(path: str, *, write: bool) -> None:
+    """Generate README updates and optionally write to file."""
+    try:
+        config = load_config(path)
+        errors = validate_config(config)
+        if errors:
+            for error in errors:
+                reporter.print_error(error)
+            raise click.Abort
+    except Exception as e:
+        reporter.print_error(f"Failed to load configuration: {e}")
+        raise click.Abort from e
+
+    if not _is_llm_runtime_configured(config):
+        reporter.print_error("LLM is not configured. Run 'nit init' or set up .nit.yml")
+        raise click.Abort
+
+    profile = load_profile(path)
+    if profile is None or is_profile_stale(path):
+        reporter.print_info("Profile is stale, re-scanning...")
+        profile = _build_profile(path)
+        save_profile(profile)
+
+    readme_path = find_readme(path)
+    if readme_path is None:
+        reporter.print_error("No README file found. Create README.md (or readme.md) first.")
+        raise click.Abort
+
+    llm_config = load_llm_config(path)
+    engine = create_engine(llm_config)
+    updater = ReadmeUpdater(engine)
+
+    reporter.print_info("Generating README updates...")
+    try:
+        content = asyncio.run(updater.update_readme(path, profile, readme_path))
+    except FileNotFoundError as e:
+        reporter.print_error(str(e))
+        raise click.Abort from e
+    except Exception as e:
+        reporter.print_error(f"README generation failed: {e}")
+        raise click.Abort from e
+
+    if write:
+        readme_path.write_text(content, encoding="utf-8")
+        reporter.print_success(f"Updated {readme_path}")
+    else:
+        click.echo(content)

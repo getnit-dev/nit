@@ -91,8 +91,27 @@ class PackageJsonField:
     weight: float = 0.7
 
 
+@dataclass(frozen=True)
+class CsprojDependency:
+    """A NuGet package reference in a ``.csproj`` file.
+
+    Example: ``PackageReference Include="xunit"`` → xUnit.
+    """
+
+    name: str
+    weight: float = 0.8
+
+
 # Union of all supported signal types.
-Signal = ConfigFile | Dependency | ImportPattern | FilePattern | CMakePattern | PackageJsonField
+Signal = (
+    ConfigFile
+    | CsprojDependency
+    | Dependency
+    | ImportPattern
+    | FilePattern
+    | CMakePattern
+    | PackageJsonField
+)
 
 
 # ── Framework rule ──────────────────────────────────────────────────

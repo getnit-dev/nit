@@ -24,12 +24,13 @@ classifiers = [
 ]
 dependencies = [
     "click>=8.1",
-    "pyyaml>=6.0",
+    "defusedxml>=0.7",
     "litellm>=1.0",
-    "tree-sitter>=0.23",
-    "tree-sitter-language-pack>=0.3",
+    "pyyaml>=6.0",
     "rich>=14.3.2",
     "requests>=2.32",
+    "tree-sitter>=0.23",
+    "tree-sitter-language-pack>=0.3",
 ]
 
 [project.optional-dependencies]
@@ -103,6 +104,9 @@ select = [
     "ARG",     # unused args fine in tests (fixtures)
     "TCH003",  # stdlib imports used at runtime in fixtures
 ]
+# Git CLI wrappers: executable from shutil.which(), refs validated before use
+"**/utils/git.py" = ["S603"]
+"**/utils/changelog.py" = ["S603"]
 
 [tool.mypy]
 python_version = "3.14"
@@ -122,6 +126,15 @@ strict_equality = true
 extra_checks = true
 mypy_path = "src"
 files = ["src", "tests"]
+
+# Ignore missing stubs for defusedxml only (imported module, not our code)
+[[tool.mypy.overrides]]
+module = "defusedxml"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "defusedxml.ElementTree"
+ignore_missing_imports = true
 
 [tool.black]
 line-length = 100

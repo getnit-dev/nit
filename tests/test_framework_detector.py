@@ -524,6 +524,71 @@ TEST_CASE("Math adds numbers", "[math]") {
 
 
 # ---------------------------------------------------------------------------
+# detect_frameworks — Go frameworks
+# ---------------------------------------------------------------------------
+
+
+class TestGotestDetection:
+    def test_gotest_go_mod_and_test_file(self, tmp_path: Path) -> None:
+        _write_file(tmp_path, "go.mod", "module example.com/mypkg\n")
+        _write_file(
+            tmp_path,
+            "pkg_test.go",
+            'package pkg\nimport "testing"\nfunc TestX(t *testing.T) {}\n',
+        )
+        profile = detect_frameworks(tmp_path)
+        names = [fw.name for fw in profile.frameworks]
+        assert "gotest" in names
+
+    def test_gotest_is_unit_test_category(self, tmp_path: Path) -> None:
+        _write_file(tmp_path, "go.mod", "module example.com/mypkg\n")
+        _write_file(tmp_path, "pkg_test.go", "package pkg\n")
+        profile = detect_frameworks(tmp_path)
+        gotest = next(fw for fw in profile.frameworks if fw.name == "gotest")
+        assert gotest.category == FrameworkCategory.UNIT_TEST
+
+
+class TestTestifyDetection:
+    def test_testify_go_mod_require(self, tmp_path: Path) -> None:
+        _write_file(
+            tmp_path,
+            "go.mod",
+            "module example.com/mypkg\n\nrequire github.com/stretchr/testify v1.8.0\n",
+        )
+        _write_file(
+            tmp_path,
+            "pkg_test.go",
+            'package pkg\nimport "testing"\nfunc TestX(t *testing.T) {}\n',
+        )
+        profile = detect_frameworks(tmp_path)
+        names = [fw.name for fw in profile.frameworks]
+        assert "testify" in names
+
+    def test_testify_import_pattern(self, tmp_path: Path) -> None:
+        _write_file(tmp_path, "go.mod", "module example.com/mypkg\n")
+        _write_file(
+            tmp_path,
+            "pkg_test.go",
+            'package pkg\nimport (\n\t"testing"\n\t"github.com/stretchr/testify/assert"\n)\n'
+            "func TestX(t *testing.T) { assert.True(t, true) }\n",
+        )
+        profile = detect_frameworks(tmp_path)
+        names = [fw.name for fw in profile.frameworks]
+        assert "testify" in names
+
+    def test_testify_is_unit_test_category(self, tmp_path: Path) -> None:
+        _write_file(
+            tmp_path,
+            "go.mod",
+            "module example.com/mypkg\n\nrequire github.com/stretchr/testify v1.8.0\n",
+        )
+        _write_file(tmp_path, "pkg_test.go", "package pkg\n")
+        profile = detect_frameworks(tmp_path)
+        testify = next(fw for fw in profile.frameworks if fw.name == "testify")
+        assert testify.category == FrameworkCategory.UNIT_TEST
+
+
+# ---------------------------------------------------------------------------
 # Conflict resolution
 # ---------------------------------------------------------------------------
 
@@ -787,15 +852,20 @@ class TestDetectFrameworksEdgeCases:
         rules = builtin_rules()
         names = {r.name for r in rules}
         assert names == {
-            "vitest",
+            "cargo_test",
+            "catch2",
+            "cypress",
+            "gotest",
+            "gtest",
             "jest",
+            "junit5",
             "mocha",
             "playwright",
-            "cypress",
             "pytest",
+            "testify",
             "unittest",
-            "catch2",
-            "gtest",
+            "vitest",
+            "xunit",
         }
 
     def test_minimum_confidence_filter(self, tmp_path: Path) -> None:
@@ -1026,3 +1096,31 @@ dev = ["pytest"]
         names = {fw.name for fw in profile.frameworks}
         assert "pytest" in names
         assert "jest" in names
+
+    def test_csharp_xunit_project(self, tmp_path: Path) -> None:
+        """C# project with xUnit (.csproj PackageReference + using Xunit)."""
+        _write_file(
+            tmp_path,
+            "MyTests.csproj",
+            """\
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit" Version="2.6.0" />
+  </ItemGroup>
+</Project>
+""",
+        )
+        _write_file(
+            tmp_path,
+            "CalculatorTests.cs",
+            "using Xunit;\n\npublic class CalculatorTests { }\n",
+        )
+        profile = detect_frameworks(tmp_path)
+        names = {fw.name for fw in profile.frameworks}
+        assert "xunit" in names
+        xunit_fw = next(fw for fw in profile.frameworks if fw.name == "xunit")
+        assert xunit_fw.language == "csharp"
