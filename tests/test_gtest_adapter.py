@@ -6,6 +6,7 @@ and tree-sitter validation with sample C++ fixtures.
 
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING
 
 import pytest
@@ -314,6 +315,7 @@ class TestHelpers:
         detected = _find_cmake_build_dir(tmp_path)
         assert detected == build_dir
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix-only test (shell scripts)")
     def test_discover_gtest_binaries(self, tmp_path: Path) -> None:
         build_dir = tmp_path / "build"
         binary = _write_file(build_dir, "math_test", "#!/bin/sh\nexit 0\n")

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -479,6 +480,7 @@ class TestOAuthAuthStrategy:
 class TestCustomAuthStrategy:
     """Test custom authentication strategy."""
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix shell scripts only")
     async def test_setup_with_valid_script(self, tmp_path: Path) -> None:
         """Test custom auth with a valid script."""
         script = tmp_path / "auth-setup.sh"
@@ -517,6 +519,7 @@ class TestCustomAuthStrategy:
         with pytest.raises(FileNotFoundError, match="Custom auth script not found"):
             await strategy.setup(context)
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix shell scripts only")
     async def test_setup_with_invalid_json(self, tmp_path: Path) -> None:
         """Test custom auth with script returning invalid JSON."""
         script = tmp_path / "auth-setup.sh"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 
 import pytest
@@ -176,6 +177,7 @@ async def test_run_subprocess_large_output() -> None:
     assert len(result.stdout) >= 10000
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows console encoding limitations")
 async def test_run_subprocess_unicode_output() -> None:
     """Test subprocess handles Unicode correctly."""
     result = await run_subprocess(["python3", "-c", "print('Hello 世界 🌍')"])

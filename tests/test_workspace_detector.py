@@ -803,7 +803,8 @@ class TestEdgeCases:
         _write_package_json(tmp_path / "packages" / "a", {"name": "a"})
 
         profile = detect_workspace(tmp_path)
-        paths = [pkg.path for pkg in profile.packages]
+        # Normalize paths to forward slashes for cross-platform comparison
+        paths = [pkg.path.replace("\\", "/") for pkg in profile.packages]
         assert paths.count("packages/a") == 1
 
     def test_nonexistent_workspace_members_ignored(self, tmp_path: Path) -> None:
