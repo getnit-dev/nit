@@ -227,9 +227,7 @@ class ChangelogGenerator:
             )
             date_str = result.stdout.strip()
             if date_str:
-                return datetime.strptime(date_str.split()[0], "%Y-%m-%d").replace(
-                    tzinfo=UTC
-                )
+                return datetime.strptime(date_str.split()[0], "%Y-%m-%d").replace(tzinfo=UTC)
         except Exception as e:
             logger.debug("Could not get release date for %s: %s", self.to_ref, e)
         return None

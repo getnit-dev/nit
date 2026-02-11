@@ -130,7 +130,7 @@ def _parse_trx(trx_path: Path, raw_output: str) -> RunResult:
     result = RunResult(raw_output=raw_output)
     try:
         tree = ElementTree.parse(trx_path)
-    except (DefusedParseError, OSError):
+    except DefusedParseError, OSError:
         return result
 
     root = tree.getroot()

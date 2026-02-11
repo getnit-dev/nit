@@ -67,7 +67,7 @@ def _process_line_elem(
         out_branches.append(
             BranchCoverage(line_number=nr, branch_id=0, taken_count=taken, total_count=total)
         )
-    except (ValueError, IndexError):
+    except ValueError, IndexError:
         pass
 
 
