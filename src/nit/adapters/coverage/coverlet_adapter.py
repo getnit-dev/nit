@@ -26,8 +26,6 @@ from nit.adapters.coverage.base import (
 if TYPE_CHECKING:
     from pathlib import Path
     from xml.etree.ElementTree import Element as XmlElement
-else:
-    XmlElement = ElementTree.Element  # runtime: same type as defusedxml
 
 logger = logging.getLogger(__name__)
 

@@ -31,8 +31,6 @@ from nit.parsing.treesitter import (
 if TYPE_CHECKING:
     from pathlib import Path
     from xml.etree.ElementTree import Element as XmlElement
-else:
-    XmlElement = ElementTree.Element  # runtime: same type as defusedxml
 
 _CSHARP_LANGUAGE = "csharp"
 _DURATION_MS_SCALE = 1000.0
