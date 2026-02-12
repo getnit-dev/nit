@@ -201,6 +201,72 @@ def get_command_path(
     return None
 
 
+def _is_node_package_installed(package: str, project_path: Path) -> bool:
+    """Check if a Node.js package is installed in node_modules."""
+    node_modules = project_path / "node_modules"
+    if not node_modules.exists():
+        return False
+
+    # Handle scoped packages (e.g., @playwright/test)
+    package_path = node_modules
+    for part in package.split("/"):
+        package_path = package_path / part
+
+    if package_path.exists():
+        return True
+
+    # For pnpm workspaces, packages are stored in node_modules/.pnpm/
+    pnpm_dir = node_modules / ".pnpm"
+    if pnpm_dir.is_dir():
+        pnpm_name = package.replace("/", "+") if package.startswith("@") else package
+        try:
+            for child in pnpm_dir.iterdir():
+                if child.name.startswith(pnpm_name + "@"):
+                    return True
+        except OSError:
+            pass
+
+    return False
+
+
+async def _is_python_package_installed(package: str, project_path: Path) -> bool:
+    """Check if a Python package is installed via importlib.metadata."""
+    env = detect_python_environment(project_path)
+    python_cmd = "python"
+    if env and env.bin_path:
+        python_path = env.bin_path / "python"
+        if python_path.exists():
+            python_cmd = str(python_path)
+
+    check_script = f"from importlib.metadata import distribution; distribution({package!r})"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            python_cmd,
+            "-c",
+            check_script,
+            cwd=str(project_path),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        returncode = await proc.wait()
+        return returncode == 0
+    except (OSError, FileNotFoundError):
+        return False
+
+
+def _is_cargo_package_installed(package: str, project_path: Path) -> bool:
+    """Check if a Cargo package appears in Cargo.toml."""
+    cargo_toml = project_path / "Cargo.toml"
+    if not cargo_toml.exists():
+        return False
+
+    try:
+        content = cargo_toml.read_text(encoding="utf-8")
+        return package in content
+    except OSError:
+        return False
+
+
 async def is_package_installed(
     package: str,
     package_manager: PackageManager,
@@ -222,75 +288,13 @@ async def is_package_installed(
         PackageManager.PNPM,
         PackageManager.BUN,
     }:
-        # Check if package actually exists in node_modules (not just package.json)
-        node_modules = project_path / "node_modules"
-        if not node_modules.exists():
-            return False
-
-        # Check if the package directory exists in node_modules
-        # Handle scoped packages (e.g., @playwright/test -> @playwright/test)
-        package_parts = package.split("/")
-        package_path = node_modules
-        for part in package_parts:
-            package_path = package_path / part
-
-        if package_path.exists():
-            return True
-
-        # For pnpm workspaces, packages are stored in node_modules/.pnpm/
-        # with the format: .pnpm/<pkg>@<version>/node_modules/<pkg>
-        pnpm_dir = node_modules / ".pnpm"
-        if pnpm_dir.is_dir():
-            # Normalize scoped package name for pnpm directory lookup
-            # e.g., @vitest/coverage-v8 -> @vitest+coverage-v8@<version>
-            pnpm_name = package.replace("/", "+") if package.startswith("@") else package
-            try:
-                for child in pnpm_dir.iterdir():
-                    if child.name.startswith(pnpm_name + "@"):
-                        return True
-            except OSError:
-                pass
-
-        return False
+        return _is_node_package_installed(package, project_path)
 
     if package_manager in {PackageManager.PIP, PackageManager.POETRY, PackageManager.UV}:
-        # Use importlib.metadata to check by distribution name (handles
-        # packages with hyphens like ``pytest-json-report`` that cannot
-        # be checked with a plain ``import`` statement).
-        env = detect_python_environment(project_path)
-        python_cmd = "python"
-        if env and env.bin_path:
-            python_path = env.bin_path / "python"
-            if python_path.exists():
-                python_cmd = str(python_path)
-
-        check_script = f"from importlib.metadata import distribution; distribution({package!r})"
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                python_cmd,
-                "-c",
-                check_script,
-                cwd=str(project_path),
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            returncode = await proc.wait()
-            return returncode == 0
-        except (OSError, FileNotFoundError):
-            return False
+        return await _is_python_package_installed(package, project_path)
 
     if package_manager == PackageManager.CARGO:
-        # Check Cargo.toml for the dependency
-        cargo_toml = project_path / "Cargo.toml"
-        if not cargo_toml.exists():
-            return False
-
-        try:
-            content = cargo_toml.read_text(encoding="utf-8")
-            # Simple heuristic: look for package name in file
-            return package in content
-        except OSError:
-            return False
+        return _is_cargo_package_installed(package, project_path)
 
     return False
 

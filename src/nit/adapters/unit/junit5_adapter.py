@@ -269,6 +269,14 @@ async def _run_gradle_tests(
     if result.stderr:
         parts.append(result.stderr)
     raw_output = "\n".join(parts)
+
+    if "Failed to load JUnit Platform" in raw_output:
+        logger.warning(
+            "Gradle could not load the JUnit Platform. "
+            "Add testRuntimeOnly 'org.junit.platform:junit-platform-launcher' "
+            "to build.gradle dependencies.",
+        )
+
     xml_files = _find_gradle_test_results(project_path) if not result.timed_out else []
     return (raw_output, xml_files)
 

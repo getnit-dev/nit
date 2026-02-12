@@ -571,6 +571,11 @@ class TestJUnit5RunTestsGradle:
     ) -> None:
         _write_file(tmp_path, "gradlew", "#!/bin/sh\nexit 0\n")
         (tmp_path / "gradlew").chmod(0o755)
+        _write_file(
+            tmp_path,
+            "build.gradle",
+            'testImplementation "org.junit.jupiter:junit-jupiter:5.10.0"',
+        )
 
         # Create XML reports
         xml_dir = tmp_path / "build" / "test-results" / "test"
@@ -598,6 +603,11 @@ class TestJUnit5RunTestsGradle:
     ) -> None:
         _write_file(tmp_path, "gradlew", "#!/bin/sh\nexit 0\n")
         (tmp_path / "gradlew").chmod(0o755)
+        _write_file(
+            tmp_path,
+            "build.gradle",
+            'testImplementation "org.junit.jupiter:junit-jupiter:5.10.0"',
+        )
 
         xml_dir = tmp_path / "build" / "test-results" / "test"
         xml_dir.mkdir(parents=True)

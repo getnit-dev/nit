@@ -293,9 +293,13 @@ class XUnitAdapter(TestFrameworkAdapter):
         logger_arg = f"trx;LogFileName={_TRX_LOG_FILE}"
 
         cmd = [
-            "dotnet", "test", str(target),
-            "--logger", logger_arg,
-            "--results-directory", str(log_dir),
+            "dotnet",
+            "test",
+            str(target),
+            "--logger",
+            logger_arg,
+            "--results-directory",
+            str(log_dir),
         ]
         if test_files:
             filters = [p.stem for p in test_files if p.suffix == ".cs"]
