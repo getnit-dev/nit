@@ -4,7 +4,7 @@
 
 [![PyPI version](https://badge.fury.io/py/getnit.svg)](https://pypi.org/project/getnit/)
 [![CI](https://github.com/getnit-dev/nit/actions/workflows/ci.yml/badge.svg)](https://github.com/getnit-dev/nit/actions/workflows/ci.yml)
-[![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **nit** is a local-first AI quality agent that auto-detects your project's stack and generates comprehensive tests at every level—unit, integration, and E2E—using your existing test frameworks.
@@ -79,82 +79,101 @@ cd your-project/
 nit init
 ```
 
-nit will:
-- Detect your languages (Python, TS/JS, C++, Java, Go, Rust)
-- Detect test frameworks (pytest, Vitest, Jest, GTest, JUnit)
-- Detect workspace tools (Turborepo, Nx, pnpm, Cargo, etc.)
-- Create `.nit.yml` config file
-- Save a project profile to `.nit/profile.json`
+`nit init` handles everything in one step:
+- Detects your languages (Python, TS/JS, C++, Java, Go, Rust, C#)
+- Detects test frameworks (pytest, Vitest, Jest, GTest, JUnit, xUnit, etc.)
+- Detects workspace tools (Turborepo, Nx, pnpm, Cargo, etc.)
+- Walks you through LLM provider setup (OpenAI, Anthropic, Ollama, or any LiteLLM-supported provider)
+- Creates `.nit.yml` config and `.nit/profile.json`
 
-### 2. Configure your LLM provider
+Use `nit init --auto` for zero prompts (auto-detect everything with sensible defaults) or `nit init --quick` to accept defaults interactively.
 
-Edit `.nit.yml`:
+### 2. Run the full pipeline
+
+```bash
+nit pick
+```
+
+`nit pick` is the main command — it runs the entire quality pipeline end-to-end:
+
+1. **Scan** — analyzes your codebase, identifies untested files, undertested functions, and coverage gaps
+2. **Run** — executes your existing test suite using your native test runner
+3. **Analyze** — detects bugs, coverage gaps, and high-risk untested code
+4. **Generate & Fix** — generates missing tests and fixes for detected bugs, self-iterates on failures
+5. **Report** — displays results in your terminal with coverage summaries
+
+Common options:
+
+```bash
+nit pick --type unit               # unit tests only
+nit pick --type e2e                # E2E tests only
+nit pick --target-file src/api.py  # focus on a specific file
+nit pick --coverage-target 80      # generate until 80% coverage
+nit pick --fix                     # also fix detected bugs
+nit pick --auto-commit             # commit generated tests automatically
+nit pick --create-pr               # open a PR with the changes
+```
+
+### 3. Individual commands
+
+You can also run pipeline stages individually:
+
+```bash
+nit scan                   # detect project structure and frameworks
+nit run                    # execute test suite with coverage
+nit analyze                # find coverage gaps and bugs (no generation)
+nit debug --target-file f  # generate and apply bug fixes
+nit report --html --serve  # interactive HTML dashboard
+```
+
+---
+
+## Documentation, READMEs & Changelogs
+
+nit can generate and maintain project documentation alongside tests.
+
+```bash
+nit docs                              # generate docstrings for all files
+nit docs --file src/utils/pricing.ts  # docstrings for a specific file
+nit docs --check                      # report outdated or missing docs
+nit docs --write-to-source            # write docstrings back into source files
+```
+
+### README generation
+
+```bash
+nit docs --readme              # generate a README based on your project
+nit docs --readme --write      # write it to README.md
+```
+
+### Changelog generation
+
+```bash
+nit docs --changelog v1.2.0                  # generate changelog since tag
+nit docs --changelog v1.2.0 --changelog-no-llm  # without LLM summarization
+```
+
+---
+
+## Memory & Learning
+
+nit remembers your project's patterns across runs. Memory is stored locally in `.nit/` and includes:
+
+- **Test patterns** — conventions, naming styles, and assertion patterns from your existing tests
+- **Failed patterns** — what went wrong in previous generation attempts so nit avoids repeating mistakes
+- **Project history** — coverage trends, test execution snapshots, and analytics over time
+
+Memory is enabled by default and can be configured in `.nit.yml`:
 
 ```yaml
-llm:
-  provider: openai  # or: anthropic, ollama, bedrock, vertex_ai, etc.
-  model: gpt-4o  # or: claude-3-5-sonnet-20241022, llama3.1, etc.
-  api_key: ${OPENAI_API_KEY}  # supports env var substitution
+memory:
+  enabled: true
+  store_failed_patterns: true
 ```
 
-Or use a local model with Ollama:
+---
 
-```yaml
-llm:
-  provider: ollama
-  model: llama3.1
-  base_url: http://localhost:11434
-```
-
-### 3. Scan your codebase
-
-```bash
-nit scan
-```
-
-This analyzes your codebase and identifies:
-- Untested files (0% coverage)
-- Undertested functions (public functions with no tests)
-- High-complexity code with no coverage
-- Stale tests (tests for deleted code)
-
-### 4. Generate tests
-
-```bash
-nit generate
-```
-
-nit will:
-- Parse source files with tree-sitter AST
-- Extract functions, classes, imports, and dependencies
-- Analyze existing test patterns in your project
-- Generate tests matching your conventions
-- Validate syntax with tree-sitter
-- Run tests to confirm they pass
-- Self-iterate on failures (up to 3 retries)
-
-Target specific files:
-
-```bash
-nit generate --file src/utils/pricing.ts
-nit generate --file src/api/handlers.py
-```
-
-Generate until coverage target is met:
-
-```bash
-nit generate --coverage-target 80
-```
-
-### 5. Run your test suite
-
-```bash
-nit run
-```
-
-This executes your test suite using your native test runner and displays results with coverage.
-
-### 6. Monitor LLM drift (for AI-powered apps)
+## LLM Drift Monitoring
 
 If your app uses LLM APIs, nit can monitor output quality over time.
 
@@ -174,10 +193,8 @@ drift_tests:
     threshold: 0.85  # cosine similarity threshold for semantic comparison
 ```
 
-Run drift checks:
-
 ```bash
-nit drift          # run all drift tests
+nit drift              # run all drift tests
 nit drift --baseline   # update baselines to current outputs
 nit drift --watch      # continuous monitoring
 ```
@@ -287,7 +304,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
+          python-version: '3.13'
 
       - name: Install nit
         run: pip install getnit
@@ -295,10 +312,7 @@ jobs:
       - name: Run nit
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          nit scan
-          nit generate --coverage-target 80
-          nit run
+        run: nit pick --coverage-target 80
 ```
 
 ### PR mode (diff-only testing)
@@ -346,7 +360,7 @@ jobs:
 
 ### Prerequisites
 
-- Python 3.14+
+- Python 3.11+
 - pip or pipx
 
 ### Setup
