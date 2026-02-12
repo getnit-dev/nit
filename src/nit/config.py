@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -10,7 +11,11 @@ from typing import Any
 
 import yaml
 
+logger = logging.getLogger(__name__)
+
 _ENV_VAR_RE = re.compile(r"\$\{(\w+)\}")
+
+_MIN_AUTH_TIMEOUT_MS = 1000
 
 
 def _resolve_env_vars(value: str) -> str:
@@ -18,7 +23,11 @@ def _resolve_env_vars(value: str) -> str:
 
     def _replace(match: re.Match[str]) -> str:
         var = match.group(1)
-        return os.environ.get(var, "")
+        resolved = os.environ.get(var)
+        if resolved is None:
+            logger.warning("Environment variable %s is not set (referenced in config)", var)
+            return ""
+        return resolved
 
     return _ENV_VAR_RE.sub(_replace, value)
 
@@ -108,6 +117,9 @@ class LLMConfig:
     cli_extra_args: list[str] = field(default_factory=list)
     """Additional arguments for CLI mode commands."""
 
+    token_budget: int = 0
+    """Total token budget for the session (0 = unlimited)."""
+
     @property
     def is_configured(self) -> bool:
         """Return True when enough info is present for generation."""
@@ -119,8 +131,34 @@ class LLMConfig:
 
 
 @dataclass
+class GitConfig:
+    """Git/PR/commit configuration."""
+
+    auto_commit: bool = False
+    """Automatically commit changes after generation/fixes."""
+
+    auto_pr: bool = False
+    """Automatically create PRs for generated tests/fixes."""
+
+    create_issues: bool = False
+    """Automatically create GitHub issues for detected bugs."""
+
+    create_fix_prs: bool = False
+    """Automatically create separate PRs for each bug fix."""
+
+    branch_prefix: str = "nit/"
+    """Prefix for auto-created branches (e.g., 'nit/fix-bug-123')."""
+
+    commit_message_template: str = ""
+    """Template for auto-commit messages (empty = use default)."""
+
+    base_branch: str = ""
+    """Default base branch for PRs (empty = auto-detect from git)."""
+
+
+@dataclass
 class ReportConfig:
-    """Reporting configuration."""
+    """Reporting and output configuration."""
 
     slack_webhook: str = ""
     """Slack webhook URL for notifications."""
@@ -128,13 +166,45 @@ class ReportConfig:
     email_alerts: list[str] = field(default_factory=list)
     """Email addresses for alerts."""
 
+    format: str = "terminal"
+    """Default output format: terminal, json, html, markdown."""
+
+    upload_to_platform: bool = True
+    """Upload reports to platform (when platform is configured)."""
+
+    html_output_dir: str = ".nit/reports"
+    """Directory for HTML report output."""
+
+    serve_port: int = 8080
+    """Port for serving HTML reports (when using --serve)."""
+
+
+@dataclass
+class CoverageConfig:
+    """Coverage thresholds and analysis configuration."""
+
+    line_threshold: float = 80.0
+    """Minimum acceptable line coverage percentage (default: 80%)."""
+
+    branch_threshold: float = 75.0
+    """Minimum acceptable branch coverage percentage (default: 75%)."""
+
+    function_threshold: float = 85.0
+    """Minimum acceptable function coverage percentage (default: 85%)."""
+
+    complexity_threshold: int = 10
+    """Cyclomatic complexity above which functions are high-priority (default: 10)."""
+
+    undertested_threshold: float = 50.0
+    """Coverage % below which functions are considered undertested (default: 50%)."""
+
 
 @dataclass
 class PlatformConfig:
     """Platform integration configuration."""
 
     url: str = ""
-    """Platform base URL (e.g., https://api.getnit.dev)."""
+    """Platform base URL (e.g., https://platform.getnit.dev)."""
 
     api_key: str = ""
     """Platform virtual API key for proxy/reporting."""
@@ -181,10 +251,10 @@ class AuthConfig:
     token: str = ""
     """Bearer token or API key for token-based auth (supports ${ENV_VAR} expansion)."""
 
-    token_header: str = "Authorization"  # noqa: S105
+    auth_header_name: str = "Authorization"
     """HTTP header name for token-based auth."""
 
-    token_prefix: str = "Bearer"  # noqa: S105
+    auth_prefix: str = "Bearer"
     """Prefix for token value (e.g., 'Bearer' for 'Bearer <token>')."""
 
     success_indicator: str = ""
@@ -229,6 +299,80 @@ class WorkspaceConfig:
 
 
 @dataclass
+class SentryConfig:
+    """Sentry error monitoring and observability configuration."""
+
+    enabled: bool = False
+    """Opt-in flag. No Sentry data sent unless True."""
+
+    dsn: str = ""
+    """Sentry DSN (Data Source Name). Configurable, not hardcoded."""
+
+    traces_sample_rate: float = 0.0
+    """Fraction of transactions sent for tracing (0.0-1.0). 0 = disabled."""
+
+    profiles_sample_rate: float = 0.0
+    """Fraction of profiled transactions (0.0-1.0). 0 = disabled."""
+
+    enable_logs: bool = False
+    """Send structured logs to Sentry."""
+
+    environment: str = ""
+    """Override environment tag (auto-detected if empty)."""
+
+    send_default_pii: bool = False
+    """Never enable by default. Kept False for privacy."""
+
+
+@dataclass
+class PipelineConfig:
+    """Pipeline execution configuration."""
+
+    max_fix_loops: int = 1
+    """Maximum fix-rerun iterations (0 = unlimited, 1 = single pass)."""
+
+
+@dataclass
+class ExecutionConfig:
+    """Test execution performance configuration."""
+
+    parallel_shards: int = 4
+    """Number of parallel shards for test execution."""
+
+    min_files_for_sharding: int = 8
+    """Minimum test files required to enable automatic sharding."""
+
+
+@dataclass
+class DocsConfig:
+    """Documentation generation configuration."""
+
+    enabled: bool = True
+    """Enable documentation generation."""
+
+    output_dir: str = ""
+    """Output directory for generated docs (empty = inline docstrings only)."""
+
+    style: str = ""
+    """Docstring style preference (empty = auto-detect, 'google', 'numpy')."""
+
+    framework: str = ""
+    """Documentation framework override (empty = auto-detect)."""
+
+    write_to_source: bool = False
+    """Write generated docstrings back into source files."""
+
+    check_mismatch: bool = True
+    """Detect semantic doc/code mismatches via LLM."""
+
+    exclude_patterns: list[str] = field(default_factory=list)
+    """Glob patterns for files to exclude from documentation."""
+
+    max_tokens: int = 4096
+    """Token budget per file for LLM generation."""
+
+
+@dataclass
 class NitConfig:
     """Complete nit configuration from ``.nit.yml``."""
 
@@ -241,6 +385,9 @@ class NitConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     """LLM configuration."""
 
+    git: GitConfig = field(default_factory=GitConfig)
+    """Git/PR/commit configuration."""
+
     report: ReportConfig = field(default_factory=ReportConfig)
     """Reporting configuration."""
 
@@ -252,6 +399,21 @@ class NitConfig:
 
     e2e: E2EConfig = field(default_factory=E2EConfig)
     """Global E2E configuration."""
+
+    coverage: CoverageConfig = field(default_factory=CoverageConfig)
+    """Coverage thresholds configuration."""
+
+    docs: DocsConfig = field(default_factory=DocsConfig)
+    """Documentation generation configuration."""
+
+    pipeline: PipelineConfig = field(default_factory=PipelineConfig)
+    """Pipeline execution configuration."""
+
+    execution: ExecutionConfig = field(default_factory=ExecutionConfig)
+    """Test execution performance configuration."""
+
+    sentry: SentryConfig = field(default_factory=SentryConfig)
+    """Sentry observability configuration."""
 
     packages: dict[str, dict[str, Any]] = field(default_factory=dict)
     """Per-package configuration overrides."""
@@ -290,8 +452,8 @@ def _parse_auth_config(auth_raw: dict[str, Any], default: AuthConfig | None = No
             or auth_raw.get("credentials", {}).get("password", default.password)
         ),
         token=str(auth_raw.get("token", default.token)),
-        token_header=str(auth_raw.get("token_header", default.token_header)),
-        token_prefix=str(auth_raw.get("token_prefix", default.token_prefix)),
+        auth_header_name=str(auth_raw.get("token_header", default.auth_header_name)),
+        auth_prefix=str(auth_raw.get("token_prefix", default.auth_prefix)),
         success_indicator=str(auth_raw.get("success_indicator", default.success_indicator)),
         cookie_name=str(auth_raw.get("cookie_name", default.cookie_name)),
         cookie_value=str(auth_raw.get("cookie_value", default.cookie_value)),
@@ -313,6 +475,99 @@ def _parse_e2e_config(e2e_raw: dict[str, Any], default: E2EConfig | None = None)
         enabled=bool(e2e_raw.get("enabled", default.enabled)),
         base_url=str(e2e_raw.get("base_url", default.base_url)),
         auth=_parse_auth_config(auth_raw, default.auth),
+    )
+
+
+def _parse_coverage_config(raw: dict[str, Any]) -> CoverageConfig:
+    """Parse coverage configuration from raw YAML."""
+    coverage_raw = raw.get("coverage", {})
+    if not isinstance(coverage_raw, dict):
+        coverage_raw = {}
+
+    return CoverageConfig(
+        line_threshold=float(coverage_raw.get("line_threshold", 80.0)),
+        branch_threshold=float(coverage_raw.get("branch_threshold", 75.0)),
+        function_threshold=float(coverage_raw.get("function_threshold", 85.0)),
+        complexity_threshold=int(coverage_raw.get("complexity_threshold", 10)),
+        undertested_threshold=float(coverage_raw.get("undertested_threshold", 50.0)),
+    )
+
+
+def _parse_docs_config(raw: dict[str, Any]) -> DocsConfig:
+    """Parse documentation generation configuration from raw YAML."""
+    docs_raw = raw.get("docs", {})
+    if not isinstance(docs_raw, dict):
+        docs_raw = {}
+
+    exclude_raw = docs_raw.get("exclude_patterns", [])
+    exclude_patterns = [str(p) for p in exclude_raw] if isinstance(exclude_raw, list) else []
+
+    return DocsConfig(
+        enabled=bool(docs_raw.get("enabled", True)),
+        output_dir=str(docs_raw.get("output_dir", "")),
+        style=str(docs_raw.get("style", "")),
+        framework=str(docs_raw.get("framework", "")),
+        write_to_source=bool(docs_raw.get("write_to_source", False)),
+        check_mismatch=bool(docs_raw.get("check_mismatch", True)),
+        exclude_patterns=exclude_patterns,
+        max_tokens=int(docs_raw.get("max_tokens", 4096)),
+    )
+
+
+def _parse_pipeline_config(raw: dict[str, Any]) -> PipelineConfig:
+    """Parse pipeline configuration from raw YAML."""
+    pipeline_raw = raw.get("pipeline", {})
+    if not isinstance(pipeline_raw, dict):
+        pipeline_raw = {}
+
+    return PipelineConfig(
+        max_fix_loops=int(pipeline_raw.get("max_fix_loops", 1)),
+    )
+
+
+def _parse_execution_config(raw: dict[str, Any]) -> ExecutionConfig:
+    """Parse execution performance configuration from raw YAML."""
+    exec_raw = raw.get("execution", {})
+    if not isinstance(exec_raw, dict):
+        exec_raw = {}
+
+    return ExecutionConfig(
+        parallel_shards=int(exec_raw.get("parallel_shards", 4)),
+        min_files_for_sharding=int(exec_raw.get("min_files_for_sharding", 8)),
+    )
+
+
+def _parse_sentry_config(raw: dict[str, Any]) -> SentryConfig:
+    """Parse Sentry configuration from raw YAML."""
+    sentry_raw = raw.get("sentry", {})
+    if not isinstance(sentry_raw, dict):
+        sentry_raw = {}
+
+    enabled_raw = sentry_raw.get("enabled", os.environ.get("NIT_SENTRY_ENABLED", ""))
+    enabled = enabled_raw in {True, "true", "1", "yes"}
+
+    return SentryConfig(
+        enabled=enabled,
+        dsn=str(sentry_raw.get("dsn", os.environ.get("NIT_SENTRY_DSN", ""))),
+        traces_sample_rate=float(
+            sentry_raw.get(
+                "traces_sample_rate",
+                os.environ.get("NIT_SENTRY_TRACES_SAMPLE_RATE", "0.0"),
+            )
+        ),
+        profiles_sample_rate=float(
+            sentry_raw.get(
+                "profiles_sample_rate",
+                os.environ.get("NIT_SENTRY_PROFILES_SAMPLE_RATE", "0.0"),
+            )
+        ),
+        enable_logs=sentry_raw.get(
+            "enable_logs",
+            os.environ.get("NIT_SENTRY_ENABLE_LOGS", ""),
+        )
+        in {True, "true", "1", "yes"},
+        environment=str(sentry_raw.get("environment", "")),
+        send_default_pii=False,
     )
 
 
@@ -376,6 +631,22 @@ def load_config(root: str | Path) -> NitConfig:
             if isinstance(llm_raw.get("cli_extra_args", []), list)
             else []
         ),
+        token_budget=int(llm_raw.get("token_budget", 0)),
+    )
+
+    # Parse git section
+    git_raw = raw.get("git", {})
+    if not isinstance(git_raw, dict):
+        git_raw = {}
+
+    git = GitConfig(
+        auto_commit=bool(git_raw.get("auto_commit", False)),
+        auto_pr=bool(git_raw.get("auto_pr", False)),
+        create_issues=bool(git_raw.get("create_issues", False)),
+        create_fix_prs=bool(git_raw.get("create_fix_prs", False)),
+        branch_prefix=str(git_raw.get("branch_prefix", "nit/")),
+        commit_message_template=str(git_raw.get("commit_message_template", "")),
+        base_branch=str(git_raw.get("base_branch", "")),
     )
 
     # Parse report section
@@ -386,6 +657,10 @@ def load_config(root: str | Path) -> NitConfig:
     report = ReportConfig(
         slack_webhook=str(report_raw.get("slack_webhook", "")),
         email_alerts=list(report_raw.get("email_alerts", [])),
+        format=str(report_raw.get("format", "terminal")),
+        upload_to_platform=bool(report_raw.get("upload_to_platform", True)),
+        html_output_dir=str(report_raw.get("html_output_dir", ".nit/reports")),
+        serve_port=int(report_raw.get("serve_port", 8080)),
     )
 
     # Parse platform section
@@ -420,7 +695,16 @@ def load_config(root: str | Path) -> NitConfig:
         e2e_raw = {}
     e2e = _parse_e2e_config(e2e_raw)
 
-    # Parse per-package configurations
+    coverage = _parse_coverage_config(raw)
+
+    docs = _parse_docs_config(raw)
+
+    pipeline = _parse_pipeline_config(raw)
+
+    execution = _parse_execution_config(raw)
+
+    sentry = _parse_sentry_config(raw)
+
     packages_raw = raw.get("packages", {})
     if not isinstance(packages_raw, dict):
         packages_raw = {}
@@ -429,10 +713,16 @@ def load_config(root: str | Path) -> NitConfig:
         project=project,
         testing=testing,
         llm=llm,
+        git=git,
         report=report,
         platform=platform,
         workspace=workspace,
         e2e=e2e,
+        coverage=coverage,
+        docs=docs,
+        pipeline=pipeline,
+        execution=execution,
+        sentry=sentry,
         packages=packages_raw,
         raw=raw,
     )
@@ -480,8 +770,11 @@ def validate_auth_config(auth: AuthConfig, prefix: str = "e2e.auth") -> list[str
     if auth.strategy == "custom" and not auth.custom_script:
         errors.append(f"{prefix}.custom_script is required for custom auth strategy")
 
-    if auth.timeout < 1000:  # noqa: PLR2004
-        errors.append(f"{prefix}.timeout should be at least 1000ms (got: {auth.timeout})")
+    if auth.timeout < _MIN_AUTH_TIMEOUT_MS:
+        errors.append(
+            f"{prefix}.timeout should be at least {_MIN_AUTH_TIMEOUT_MS}ms "
+            f"(got: {auth.timeout})"
+        )
 
     return errors
 
@@ -537,6 +830,78 @@ def _validate_platform_config(platform: PlatformConfig) -> list[str]:
     return errors
 
 
+def _validate_coverage_config(coverage: CoverageConfig) -> list[str]:
+    """Validate coverage threshold settings."""
+    max_percentage = 100.0
+    errors: list[str] = []
+
+    if not 0.0 <= coverage.line_threshold <= max_percentage:
+        errors.append(
+            f"coverage.line_threshold must be between 0 and 100 "
+            f"(got: {coverage.line_threshold})"
+        )
+
+    if not 0.0 <= coverage.branch_threshold <= max_percentage:
+        errors.append(
+            f"coverage.branch_threshold must be between 0 and 100 "
+            f"(got: {coverage.branch_threshold})"
+        )
+
+    if not 0.0 <= coverage.function_threshold <= max_percentage:
+        errors.append(
+            f"coverage.function_threshold must be between 0 and 100 "
+            f"(got: {coverage.function_threshold})"
+        )
+
+    if coverage.complexity_threshold < 1:
+        errors.append(
+            f"coverage.complexity_threshold must be at least 1 "
+            f"(got: {coverage.complexity_threshold})"
+        )
+
+    if not 0.0 <= coverage.undertested_threshold <= max_percentage:
+        errors.append(
+            f"coverage.undertested_threshold must be between 0 and 100 "
+            f"(got: {coverage.undertested_threshold})"
+        )
+
+    return errors
+
+
+def _validate_pipeline_config(pipeline: PipelineConfig) -> list[str]:
+    """Validate pipeline execution settings."""
+    errors: list[str] = []
+
+    if pipeline.max_fix_loops < 0:
+        errors.append(
+            f"pipeline.max_fix_loops must be non-negative (got: {pipeline.max_fix_loops})"
+        )
+
+    return errors
+
+
+def _validate_sentry_config(sentry: SentryConfig) -> list[str]:
+    """Validate Sentry configuration."""
+    errors: list[str] = []
+
+    if sentry.enabled and not sentry.dsn:
+        errors.append("sentry.dsn is required when sentry.enabled is true")
+
+    if not 0.0 <= sentry.traces_sample_rate <= 1.0:
+        errors.append(
+            f"sentry.traces_sample_rate must be between 0.0 and 1.0 "
+            f"(got: {sentry.traces_sample_rate})"
+        )
+
+    if not 0.0 <= sentry.profiles_sample_rate <= 1.0:
+        errors.append(
+            f"sentry.profiles_sample_rate must be between 0.0 and 1.0 "
+            f"(got: {sentry.profiles_sample_rate})"
+        )
+
+    return errors
+
+
 def validate_config(config: NitConfig) -> list[str]:
     """Validate the configuration and return a list of error messages.
 
@@ -549,6 +914,9 @@ def validate_config(config: NitConfig) -> list[str]:
 
     errors.extend(_validate_llm_config(config.llm))
     errors.extend(_validate_platform_config(config.platform))
+    errors.extend(_validate_coverage_config(config.coverage))
+    errors.extend(_validate_pipeline_config(config.pipeline))
+    errors.extend(_validate_sentry_config(config.sentry))
 
     # Validate global E2E auth config
     if config.e2e.auth.strategy:

@@ -8,9 +8,9 @@ branding:
 
 inputs:
   mode:
-    description: 'Operation mode: hunt (scan+analyze+generate+test), run (run existing tests), drift (check LLM drift), docs (generate documentation)'
+    description: 'Operation mode: pick (scan+analyze+generate+test), run (run existing tests), drift (check LLM drift), docs (generate documentation)'
     required: false
-    default: 'hunt'
+    default: 'pick'
 
   llm_provider:
     description: 'LLM provider: openai, anthropic, ollama, bedrock, vertex_ai, etc.'
@@ -41,10 +41,105 @@ inputs:
     required: false
     default: '80'
 
+  fix:
+    description: 'Enable automatic bug fixing (pick mode only)'
+    required: false
+    default: 'false'
+
+  create_pr:
+    description: 'Create a GitHub PR with generated tests/fixes. In PR context, adds commits to existing PR instead.'
+    required: false
+    default: 'false'
+
+  create_issues:
+    description: 'Create GitHub issues for detected bugs (pick mode only)'
+    required: false
+    default: 'false'
+
+  create_fix_prs:
+    description: 'Create GitHub PRs with bug fixes (pick mode only)'
+    required: false
+    default: 'false'
+
+  upload_report:
+    description: 'Upload pick results to nit platform'
+    required: false
+    default: 'false'
+
+  platform_url:
+    description: 'nit platform API URL (for report uploads)'
+    required: false
+    default: 'https://platform.getnit.dev'
+
+  platform_api_key:
+    description: 'nit platform API key (for report uploads)'
+    required: false
+    default: ''
+
   python_version:
     description: 'Python version to use'
     required: false
     default: '3.12'
+
+  shard_index:
+    description: 'Shard index (0-based) for parallel test execution. Use with shard_count and a matrix strategy.'
+    required: false
+    default: ''
+
+  shard_count:
+    description: 'Total number of shards for parallel test execution. Use with shard_index and a matrix strategy.'
+    required: false
+    default: ''
+
+  sentry_enabled:
+    description: 'Enable Sentry error tracking and observability'
+    required: false
+    default: 'false'
+
+  sentry_dsn:
+    description: 'Sentry DSN (Data Source Name) for error tracking'
+    required: false
+    default: ''
+
+  sentry_traces_sample_rate:
+    description: 'Sentry traces sample rate (0.0-1.0, 0 = disabled)'
+    required: false
+    default: '0.0'
+
+  sentry_profiles_sample_rate:
+    description: 'Sentry profiles sample rate (0.0-1.0, 0 = disabled)'
+    required: false
+    default: '0.0'
+
+  sentry_enable_logs:
+    description: 'Send structured logs to Sentry'
+    required: false
+    default: 'false'
+
+  docs_write_to_source:
+    description: 'Write generated docstrings back to source files (docs mode)'
+    required: false
+    default: 'false'
+
+  docs_check_mismatch:
+    description: 'Check for documentation/code semantic mismatches (docs mode)'
+    required: false
+    default: 'true'
+
+  docs_style:
+    description: 'Docstring style: google, numpy (empty for auto-detect)'
+    required: false
+    default: ''
+
+  docs_framework:
+    description: 'Documentation framework override (auto-detected if empty)'
+    required: false
+    default: ''
+
+  docs_output_dir:
+    description: 'Output directory for generated documentation files'
+    required: false
+    default: ''
 
 outputs:
   tests_generated:
@@ -62,6 +157,18 @@ outputs:
   coverage_after:
     description: 'Coverage percentage after test generation'
     value: ${{ steps.run_nit.outputs.coverage_after }}
+
+  shard_result_path:
+    description: 'Path to shard result JSON file (when sharding is enabled)'
+    value: ${{ steps.run_nit.outputs.shard_result_path }}
+
+  docs_generated:
+    description: 'Number of documentation items generated (docs mode)'
+    value: ${{ steps.run_nit.outputs.docs_generated }}
+
+  docs_mismatches:
+    description: 'Number of documentation/code mismatches found (docs mode)'
+    value: ${{ steps.run_nit.outputs.docs_mismatches }}
 
 runs:
   using: 'composite'
@@ -83,9 +190,17 @@ runs:
       env:
         OPENAI_API_KEY: ${{ inputs.llm_api_key }}
         ANTHROPIC_API_KEY: ${{ inputs.llm_api_key }}
+        NIT_PLATFORM_URL: ${{ inputs.platform_url }}
+        NIT_PLATFORM_API_KEY: ${{ inputs.platform_api_key }}
+        GITHUB_TOKEN: ${{ github.token }}
+        NIT_SENTRY_ENABLED: ${{ inputs.sentry_enabled }}
+        NIT_SENTRY_DSN: ${{ inputs.sentry_dsn }}
+        NIT_SENTRY_TRACES_SAMPLE_RATE: ${{ inputs.sentry_traces_sample_rate }}
+        NIT_SENTRY_PROFILES_SAMPLE_RATE: ${{ inputs.sentry_profiles_sample_rate }}
+        NIT_SENTRY_ENABLE_LOGS: ${{ inputs.sentry_enable_logs }}
       run: |
         # Build nit command
-        CMD="nit ${{ inputs.mode }}"
+        CMD="nit --ci ${{ inputs.mode }}"
 
         # Add optional flags
         if [ -n "${{ inputs.llm_model }}" ]; then
@@ -97,19 +212,100 @@ runs:
         fi
 
         if [ "${{ inputs.test_type }}" != "all" ]; then
-          CMD="$CMD --test-type ${{ inputs.test_type }}"
+          CMD="$CMD --type ${{ inputs.test_type }}"
         fi
 
         if [ -n "${{ inputs.coverage_target }}" ]; then
           CMD="$CMD --coverage-target ${{ inputs.coverage_target }}"
         fi
 
-        # Run nit and capture output
-        echo "Running: $CMD"
-        $CMD | tee nit_output.txt
+        # Pick mode specific flags
+        if [ "${{ inputs.mode }}" = "pick" ]; then
+          if [ "${{ inputs.fix }}" = "true" ]; then
+            CMD="$CMD --fix"
+          fi
 
-        # Parse output and set action outputs (placeholder - adjust based on actual nit output format)
-        echo "tests_generated=0" >> $GITHUB_OUTPUT
-        echo "tests_passed=0" >> $GITHUB_OUTPUT
-        echo "coverage_before=0" >> $GITHUB_OUTPUT
-        echo "coverage_after=0" >> $GITHUB_OUTPUT
+          if [ "${{ inputs.create_pr }}" = "true" ]; then
+            CMD="$CMD --pr"
+          fi
+
+          if [ "${{ inputs.create_issues }}" = "true" ]; then
+            CMD="$CMD --create-issues"
+          fi
+
+          if [ "${{ inputs.create_fix_prs }}" = "true" ]; then
+            CMD="$CMD --create-fix-prs"
+          fi
+
+          if [ "${{ inputs.upload_report }}" = "true" ]; then
+            CMD="$CMD --report"
+          fi
+        fi
+
+        # Docs mode specific flags
+        if [ "${{ inputs.mode }}" = "docs" ]; then
+          CMD="$CMD --all"
+
+          if [ "${{ inputs.docs_write_to_source }}" = "true" ]; then
+            CMD="$CMD --write-to-source"
+          fi
+
+          if [ "${{ inputs.docs_check_mismatch }}" = "false" ]; then
+            CMD="$CMD --no-check-mismatch"
+          fi
+
+          if [ -n "${{ inputs.docs_style }}" ]; then
+            CMD="$CMD --style ${{ inputs.docs_style }}"
+          fi
+
+          if [ -n "${{ inputs.docs_framework }}" ]; then
+            CMD="$CMD --framework ${{ inputs.docs_framework }}"
+          fi
+
+          if [ -n "${{ inputs.docs_output_dir }}" ]; then
+            CMD="$CMD --output-dir ${{ inputs.docs_output_dir }}"
+          fi
+        fi
+
+        # Add sharding flags if provided
+        if [ -n "${{ inputs.shard_index }}" ] && [ -n "${{ inputs.shard_count }}" ]; then
+          SHARD_OUTPUT=".nit/shard-result-${{ inputs.shard_index }}.json"
+          CMD="$CMD --shard-index ${{ inputs.shard_index }} --shard-count ${{ inputs.shard_count }} --shard-output $SHARD_OUTPUT"
+          echo "shard_result_path=$SHARD_OUTPUT" >> $GITHUB_OUTPUT
+        fi
+
+        # Run nit with JSON output and capture results
+        echo "Running: $CMD --format json"
+        $CMD --format json | tee nit_output.txt
+
+        # Parse JSON output for action outputs
+        if command -v python3 &>/dev/null && [ -f nit_output.txt ]; then
+          TESTS_GENERATED=$(python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('tests_generated',0))" < nit_output.txt 2>/dev/null || echo "0")
+          TESTS_PASSED=$(python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('tests_passed',0))" < nit_output.txt 2>/dev/null || echo "0")
+          COVERAGE_BEFORE=$(python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('coverage_before',0))" < nit_output.txt 2>/dev/null || echo "0")
+          COVERAGE_AFTER=$(python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('coverage_after',0))" < nit_output.txt 2>/dev/null || echo "0")
+          DOCS_GENERATED=$(python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('docs_generated',0))" < nit_output.txt 2>/dev/null || echo "0")
+          DOCS_MISMATCHES=$(python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('docs_mismatches',0))" < nit_output.txt 2>/dev/null || echo "0")
+        else
+          TESTS_GENERATED=0
+          TESTS_PASSED=0
+          COVERAGE_BEFORE=0
+          COVERAGE_AFTER=0
+          DOCS_GENERATED=0
+          DOCS_MISMATCHES=0
+        fi
+
+        echo "tests_generated=$TESTS_GENERATED" >> $GITHUB_OUTPUT
+        echo "tests_passed=$TESTS_PASSED" >> $GITHUB_OUTPUT
+        echo "coverage_before=$COVERAGE_BEFORE" >> $GITHUB_OUTPUT
+        echo "coverage_after=$COVERAGE_AFTER" >> $GITHUB_OUTPUT
+        echo "docs_generated=$DOCS_GENERATED" >> $GITHUB_OUTPUT
+        echo "docs_mismatches=$DOCS_MISMATCHES" >> $GITHUB_OUTPUT
+
+    - name: Upload shard result
+      if: inputs.shard_index != '' && inputs.shard_count != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: nit-shard-result-${{ inputs.shard_index }}
+        path: .nit/shard-result-${{ inputs.shard_index }}.json
+        retention-days: 1

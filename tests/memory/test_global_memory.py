@@ -1,11 +1,8 @@
 """Tests for GlobalMemory."""
 
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 from nit.memory.global_memory import GlobalMemory
 

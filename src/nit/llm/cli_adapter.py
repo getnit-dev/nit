@@ -13,6 +13,7 @@ import contextlib
 import json
 import logging
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -30,7 +31,7 @@ from nit.llm.engine import (
     LLMMessage,
     LLMResponse,
 )
-from nit.llm.usage_callback import report_cli_usage_event
+from nit.llm.usage_callback import CLIUsageEvent, report_cli_usage_event
 
 logger = logging.getLogger(__name__)
 
@@ -327,18 +328,20 @@ class CLIToolAdapter(LLMEngine, ABC):
         provider = response.provider or self._default_provider()
 
         report_cli_usage_event(
-            provider=provider,
-            model=response.model or model,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            cost_usd=max(response.cost_usd, 0.0),
-            cache_hit=response.cache_hit,
-            source="cli",
-            duration_ms=response.duration_ms,
-            metadata={
-                "nit_cli_command": self._config.command,
-                "nit_usage_mode": "cli",
-            },
+            CLIUsageEvent(
+                provider=provider,
+                model=response.model or model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                cost_usd=max(response.cost_usd, 0.0),
+                cache_hit=response.cache_hit,
+                source="cli",
+                duration_ms=response.duration_ms,
+                metadata={
+                    "nit_cli_command": self._config.command,
+                    "nit_usage_mode": "cli",
+                },
+            )
         )
 
     @staticmethod
@@ -524,7 +527,7 @@ class CodexAdapter(CLIToolAdapter):
             parsed_model = str(data.get("model", model))
             provider = str(data.get("provider", provider))
             cache_hit = bool(data.get("cache_hit", False))
-        except json.JSONDecodeError, TypeError, ValueError:
+        except (json.JSONDecodeError, TypeError, ValueError):
             # Fall back to raw stdout if not JSON
             text = stdout.strip()
             if not error and exit_code == 0:
@@ -618,8 +621,8 @@ class CustomCommandAdapter(CLIToolAdapter):
             model=model,
         )
 
-        # Parse into args (simple split, shell=True would be insecure)
-        cmd = cmd_str.split()
+        # Parse into args (shlex handles quoted arguments correctly)
+        cmd = shlex.split(cmd_str)
         cmd.extend(self._config.extra_args)
 
         # Store output file path for reading later

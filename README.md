@@ -1,29 +1,13 @@
-# nit
+# nit — Never Ignore Tests
 
 ### Open-Source AI Testing, Documentation & Quality Agent
 
 [![PyPI version](https://badge.fury.io/py/getnit.svg)](https://pypi.org/project/getnit/)
+[![CI](https://github.com/getnit-dev/nit/actions/workflows/ci.yml/badge.svg)](https://github.com/getnit-dev/nit/actions/workflows/ci.yml)
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **nit** is a local-first AI quality agent that auto-detects your project's stack and generates comprehensive tests at every level—unit, integration, and E2E—using your existing test frameworks.
-
----
-
-## The Problem
-
-Software testing is broken:
-
-- **85% of bugs reach production** despite decades of testing tools
-- **Unit test coverage stagnates** because writing tests is tedious and always deprioritized
-- **E2E tests are brittle** — auth flows, flaky selectors, and environment config drain engineering time
-- **AI-generated code creates technical debt** — only 29% of developers trust AI code accuracy
-- **LLM-powered features drift silently** — model updates change your app's behavior and nobody notices
-- **Documentation rots** — always the last thing updated, first thing abandoned
-
-Existing solutions are expensive SaaS products ($2.5K–$4K/month) or narrow open-source tools that only cover one slice.
-
-**nit does the full loop**: detect your stack → generate tests → run them → report bugs → self-heal broken tests → track coverage → monitor LLM drift → keep docs current.
 
 ---
 
@@ -37,9 +21,28 @@ Existing solutions are expensive SaaS products ($2.5K–$4K/month) or narrow ope
 - ✅ **Coverage-driven** — identifies untested code, undertested functions, and dead zones
 - ✅ **Self-healing E2E tests** — when UI selectors break, nit updates them automatically
 - ✅ **LLM drift monitoring** — tracks prompt→output quality over time for AI features
-- ✅ **Multi-language** — Python, TypeScript/JavaScript, C/C++, Java, Go, Rust (more coming)
+- ✅ **Multi-language** — Python, TypeScript/JavaScript, C/C++, Java, Kotlin, Go, Rust, C# (more coming)
 - ✅ **Monorepo-aware** — supports Turborepo, Nx, pnpm workspaces, Yarn, npm, Cargo, Go modules
+- ✅ **Parallel execution** — automatic test sharding with AST and LLM response caching
 - ✅ **Bring your own LLM** — works with OpenAI, Anthropic, Ollama, or any LiteLLM-supported provider
+
+---
+
+## Architecture
+
+```mermaid
+graph LR
+    CLI["nit CLI"] --> Detect["Detect<br/>(Stack, Framework,<br/>Workspace)"]
+    Detect --> Analyze["Analyze<br/>(Coverage, Risk,<br/>Code, Diff)"]
+    Analyze --> Build["Build<br/>(Unit, E2E,<br/>Integration, Docs)"]
+    Build --> Validate["Validate<br/>(Parse, Run,<br/>Self-iterate)"]
+    Validate --> Report["Report<br/>(Terminal, GitHub,<br/>Dashboard, Slack)"]
+    Build -->|LLM| LLM["LLM Engine<br/>(OpenAI, Anthropic,<br/>Ollama, CLI)"]
+    LLM --> Build
+    Validate -->|Failure| Build
+    Memory["Memory<br/>(Patterns, History)"] -.-> Build
+    Build -.-> Memory
+```
 
 ---
 
@@ -307,48 +310,6 @@ jobs:
 
 ---
 
-## How It Works
-
-### 1. Detection Phase
-
-nit uses multiple signals to understand your project:
-
-- **Language detection**: Scan file extensions → parse with tree-sitter to confirm
-- **Framework detection**: Check config files (`package.json`, `pyproject.toml`, `CMakeLists.txt`), import patterns, file structures
-- **Workspace detection**: Identify monorepo tools (Turborepo, Nx, pnpm, Cargo, Go workspaces)
-- **Coverage mapping**: Parse existing tests, map to source files, identify gaps
-
-### 2. Generation Phase
-
-For each untested file/function:
-
-1. **Parse** with tree-sitter → extract functions, classes, dependencies, types
-2. **Analyze** imports and call graph → understand side effects (DB, API, filesystem)
-3. **Retrieve context** → find related files, existing test patterns, project conventions
-4. **Prompt LLM** with structured context:
-   - Source code being tested
-   - Existing test examples (for style matching)
-   - Framework-specific patterns (from adapter templates)
-   - Dependency information (what to mock)
-5. **Validate** generated test:
-   - Parse with tree-sitter → must be syntactically valid
-   - Run test → must pass or fail for expected reasons
-   - Self-iterate → if errors, feed error back to LLM (up to 3 retries)
-6. **Write** verified test file in correct location
-
-### 3. Memory & Learning
-
-nit learns from your project:
-
-- **Conventions**: Naming patterns, assertion styles, mocking strategies
-- **Failed patterns**: What didn't work, to avoid repeating mistakes
-- **Successful patterns**: What worked well, to reuse
-- **Project structure**: Where tests go, how they're organized
-
-Memory is stored in `.nit/memory/` and improves generation quality over time.
-
----
-
 ## Supported Languages & Frameworks
 
 ### Unit Testing
@@ -361,6 +322,8 @@ Memory is stored in `.nit/memory/` and improves generation quality over time.
 | **Java** | JUnit 5, TestNG | JaCoCo |
 | **Go** | go test, testify | go test -cover |
 | **Rust** | cargo test | cargo-tarpaulin |
+| **C#/.NET** | xUnit | Coverlet |
+| **Kotlin** | Kotest, JUnit 5 | JaCoCo |
 
 ### E2E Testing
 
@@ -489,129 +452,53 @@ Example: Adding JUnit 5 support
 6. Write tests in `tests/adapters/unit/test_junit5_adapter.py`
 7. Register in `src/nit/adapters/unit/__init__.py`
 
----
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        nit CLI (Python)                          │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────┐    │
-│  │   SCANNER    │  │  GENERATOR   │  │     RUNNER         │    │
-│  │              │  │              │  │                    │    │
-│  │ • Tree-sitter│  │ • LLM engine │  │ • Subprocess mgr  │    │
-│  │   AST parse  │  │   (LiteLLM)  │  │ • Parallel exec   │    │
-│  │ • Framework  │  │ • Templates  │  │ • Result parser    │    │
-│  │   detection  │  │ • Adapters   │  │ • Coverage merge   │    │
-│  └──────────────┘  └──────────────┘  └────────────────────┘    │
-│                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │              FRAMEWORK ADAPTERS (pluggable)               │   │
-│  │                                                           │   │
-│  │  Vitest • Jest • pytest • GTest • JUnit • Playwright     │   │
-│  └──────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Roadmap
-
-See [PLAN.md](PLAN.md) for the full development roadmap.
-
-### Phase 1 — Foundation (Weeks 1–4) ✅
-
-- [x] Project scaffolding
-- [x] Tree-sitter integration for multi-language AST parsing
-- [x] Stack, framework, and workspace detection
-- [x] LLM interface with LiteLLM
-- [x] Unit test generation (Vitest, pytest)
-- [x] Coverage integration (Istanbul, coverage.py)
-- [x] Test validation and self-iteration loop
-- [x] Memory system for learning project conventions
-- [x] CLI commands: `init`, `scan`, `generate`, `run`
-
-### Phase 2 — CI + E2E + Monorepo (Weeks 5–8)
-
-- [ ] GitHub Action for PR testing
-- [ ] Diff-based testing (PR mode)
-- [ ] E2E test generation (Playwright)
-- [ ] Route discovery for web apps
-- [ ] Auth configuration system
-- [ ] Full monorepo support with per-package memory
-- [ ] Self-healing test regeneration
-- [ ] GitHub PR and Issue reporters
-
-### Phase 3 — Systems Languages + Debuggers (Weeks 9–14)
-
-- [ ] C/C++ adapters (GTest, Catch2, CMake)
-- [ ] Go adapter (go test, testify)
-- [ ] Java adapter (JUnit 5, Gradle/Maven)
-- [ ] Rust adapter (cargo test)
-- [ ] Bug analysis and fix generation
-- [ ] LLM drift monitoring with semantic comparison
-- [ ] Prompt optimization suggestions
-
-### Phase 4 — Documentation + Dashboard (Weeks 15–20)
-
-- [ ] Documentation generation (Sphinx, TypeDoc, Doxygen, MkDocs)
-- [ ] README auto-update
-- [ ] Changelog generation
-- [ ] Local HTML dashboard
-- [ ] Landing page (React + Cloudflare Workers)
-- [ ] Slack/Discord notifications
-- [ ] C#/.NET adapter (xUnit, Coverlet)
-
-### Phase 5 — Web Platform (Future)
-
-- [ ] Hosted dashboard with metrics, trends, and analytics
-- [ ] LLM proxy for managed API keys
-- [ ] Team collaboration features
-
----
 
 ## FAQ
 
-### Q: Do I need to send my code to a third party?
+**Q: Do I need to send my code to a third party?**
+No. nit runs entirely locally. You bring your own LLM API key (or use a local model with Ollama).
 
-**No.** nit runs entirely locally. You bring your own LLM API key (or use a local model with Ollama). Your code never leaves your machine unless you explicitly use a remote LLM provider.
+**Q: Which LLM providers are supported?**
+nit uses [LiteLLM](https://github.com/BerriAI/litellm), which supports 100+ providers including OpenAI, Anthropic, Google, AWS Bedrock, Azure OpenAI, and Ollama (local models).
 
-### Q: Which LLM providers are supported?
+**Q: How much does it cost?**
+nit is free and open-source (MIT). You only pay for LLM API usage (~$0.01–0.03 per test). A typical project with 100 untested functions costs $1–3 to reach 80% coverage. Ollama is $0 (runs locally).
 
-nit uses [LiteLLM](https://github.com/BerriAI/litellm), which supports 100+ providers:
-- OpenAI (GPT-4, GPT-3.5)
-- Anthropic (Claude 3.5 Sonnet, Claude 3 Opus)
-- Google (Gemini, Vertex AI)
-- AWS Bedrock
-- Azure OpenAI
-- Ollama (local models: llama3.1, codellama, mistral, etc.)
-- Groq, Together AI, Replicate, Hugging Face, and more
+**Q: Will nit overwrite my existing tests?**
+No. By default, nit only generates tests for untested code.
 
-### Q: How much does it cost?
+**Q: Does nit work with monorepos?**
+Yes! Supports Turborepo, Nx, pnpm/Yarn/npm workspaces, Cargo workspaces, Go workspaces, Bazel, and more.
 
-nit itself is free and open-source (MIT license). You pay only for LLM API usage:
-- OpenAI GPT-4o: ~$0.01–0.03 per generated test
-- Anthropic Claude 3.5 Sonnet: ~$0.01–0.02 per test
-- Ollama (local): $0 (runs on your hardware)
+---
 
-A typical project with 100 untested functions costs $1–3 to reach 80% coverage.
+## Built With
 
-### Q: Will nit overwrite my existing tests?
+nit is made possible by these amazing open-source projects:
 
-No. By default, nit only generates tests for untested code. Use `--skip-existing=false` to regenerate.
+### Core
+- [LiteLLM](https://github.com/BerriAI/litellm) — Universal LLM API interface
+- [tree-sitter](https://tree-sitter.github.io/tree-sitter/) — Multi-language AST parsing
+- [Click](https://click.palletsprojects.com/) — CLI framework
+- [Rich](https://github.com/Textualize/rich) — Terminal formatting and UI
 
-### Q: Can nit fix bugs in my code?
+### Data & Processing
+- [PyYAML](https://pyyaml.org/) — YAML configuration parsing
+- [sentence-transformers](https://www.sbert.net/) — Semantic embeddings for drift detection
+- [defusedxml](https://github.com/tiran/defusedxml) — Secure XML parsing
+- [httpx](https://www.python-httpx.org/) — HTTP client
+- [jsonschema](https://python-jsonschema.readthedocs.io/) — JSON schema validation
 
-Phase 3 (coming soon) will include bug detection and fix generation. For now, nit focuses on test generation.
+### Documentation
+- [MkDocs](https://www.mkdocs.org/) — Static site generator for documentation
+- [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/) — Documentation theme with search, dark mode, and navigation
 
-### Q: Does nit work with monorepos?
-
-Yes! nit detects and supports Turborepo, Nx, pnpm workspaces, Yarn workspaces, npm workspaces, Cargo workspaces, Go workspaces, Bazel, Gradle multi-project, and Maven multi-module.
-
-### Q: Can I use nit in CI/CD?
-
-Yes. See the [GitHub Action](#github-action) section above. GitLab CI and Bitbucket Pipelines support is planned.
+### Development Tools
+- [pytest](https://pytest.org/) — Testing framework
+- [Black](https://black.readthedocs.io/) — Code formatter
+- [Ruff](https://docs.astral.sh/ruff/) — Fast Python linter
+- [mypy](https://mypy.readthedocs.io/) — Static type checker
 
 ---
 
@@ -626,7 +513,7 @@ Yes. See the [GitHub Action](#github-action) section above. GitLab CI and Bitbuc
 - **Homepage**: [https://getnit.dev](https://getnit.dev)
 - **GitHub**: [https://github.com/getnit-dev/nit](https://github.com/getnit-dev/nit)
 - **PyPI**: [https://pypi.org/project/getnit/](https://pypi.org/project/getnit/)
-- **Documentation**: [https://docs.getnit.dev](https://docs.getnit.dev) (coming soon)
+- **Documentation**: [https://docs.getnit.dev](https://docs.getnit.dev)
 - **Issues**: [https://github.com/getnit-dev/nit/issues](https://github.com/getnit-dev/nit/issues)
 
 ---

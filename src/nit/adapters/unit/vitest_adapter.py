@@ -21,6 +21,7 @@ from nit.adapters.base import (
     TestFrameworkAdapter,
     ValidationResult,
 )
+from nit.adapters.coverage.istanbul import IstanbulAdapter
 from nit.llm.prompts.vitest import VitestTemplate
 from nit.parsing.treesitter import (
     collect_error_ranges,
@@ -103,11 +104,13 @@ class VitestAdapter(TestFrameworkAdapter):
         *,
         test_files: list[Path] | None = None,
         timeout: float = _DEFAULT_TIMEOUT,
+        collect_coverage: bool = True,
     ) -> RunResult:
         """Execute Vitest via subprocess and parse JSON reporter output.
 
         Runs ``npx vitest run --reporter=json`` inside *project_path*.
         If *test_files* is provided, only those files are executed.
+        Optionally collects coverage using IstanbulAdapter.
         """
         cmd = ["npx", "vitest", "run", "--reporter=json"]
         if test_files:
@@ -141,13 +144,77 @@ class VitestAdapter(TestFrameworkAdapter):
         raw_stderr = stderr_bytes.decode("utf-8", errors="replace")
         raw_output = raw_stdout + ("\n" + raw_stderr if raw_stderr else "")
 
-        return _parse_vitest_json(raw_stdout, raw_output)
+        result = _parse_vitest_json(raw_stdout, raw_output)
+
+        # Collect coverage if requested
+        if collect_coverage:
+            try:
+                istanbul = IstanbulAdapter()
+                coverage_report = await istanbul.run_coverage(
+                    project_path, test_files=test_files, timeout=timeout
+                )
+                result.coverage = coverage_report
+                logger.info(
+                    "Coverage collected: %.1f%% line coverage",
+                    coverage_report.overall_line_coverage,
+                )
+            except Exception as e:
+                logger.warning("Failed to collect coverage: %s", e)
+                # Don't fail the test run if coverage collection fails
+
+        return result
 
     # ── Validation (1.10.4) ──────────────────────────────────────
 
     def validate_test(self, test_code: str) -> ValidationResult:
         """Parse *test_code* with tree-sitter TypeScript and report syntax errors."""
         return _validate_typescript(test_code)
+
+    def get_required_packages(self) -> list[str]:
+        """Return required packages for Vitest, including environment dependencies."""
+        return ["vitest"]
+
+    def get_required_commands(self) -> list[str]:
+        """Return required commands for Vitest."""
+        return ["node", "npx"]
+
+    def get_environment_packages(self, project_path: Path) -> list[str]:
+        """Detect additional packages needed based on vitest config.
+
+        Parses vitest.config.* files to detect test environment and
+        returns additional required packages.
+
+        Args:
+            project_path: Root of the project.
+
+        Returns:
+            List of environment-specific packages (e.g., ["jsdom"]).
+        """
+        config_content = _read_vitest_config(project_path)
+        if not config_content:
+            return []
+
+        packages = []
+
+        # Check for test environment setting
+        if "environment:" in config_content or 'environment"' in config_content:
+            if "'jsdom'" in config_content or '"jsdom"' in config_content:
+                packages.append("jsdom")
+            elif "'happy-dom'" in config_content or '"happy-dom"' in config_content:
+                packages.append("happy-dom")
+
+        # Check for coverage provider
+        if "provider:" in config_content or 'provider"' in config_content:
+            if "'v8'" in config_content or '"v8"' in config_content:
+                packages.append("@vitest/coverage-v8")
+            elif "'istanbul'" in config_content or '"istanbul"' in config_content:
+                packages.append("@vitest/coverage-istanbul")
+
+        # Check for UI mode
+        if "'@vitest/ui'" in config_content or '"@vitest/ui"' in config_content:
+            packages.append("@vitest/ui")
+
+        return packages
 
 
 # ── Detection helpers ────────────────────────────────────────────
@@ -163,6 +230,25 @@ def _has_config_file(project_path: Path) -> bool:
     return False
 
 
+def _read_vitest_config(project_path: Path) -> str | None:
+    """Read vitest config file content if it exists.
+
+    Args:
+        project_path: Project root directory.
+
+    Returns:
+        Config file content as string, or None if not found.
+    """
+    for child in _safe_iterdir(project_path):
+        name = child.name
+        if name.startswith("vitest.config."):
+            try:
+                return child.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+    return None
+
+
 def _has_vitest_dependency(project_path: Path) -> bool:
     """Check ``package.json`` for ``vitest`` in dependencies or devDependencies."""
     pkg_path = project_path / "package.json"
@@ -170,7 +256,7 @@ def _has_vitest_dependency(project_path: Path) -> bool:
         return False
     try:
         data = json.loads(pkg_path.read_text(encoding="utf-8"))
-    except OSError, json.JSONDecodeError:
+    except (OSError, json.JSONDecodeError):
         return False
     for section in ("devDependencies", "dependencies"):
         deps = data.get(section)
@@ -261,7 +347,7 @@ def _parse_vitest_json(stdout: str, raw_output: str) -> RunResult:
         duration_ms=duration_ms,
         test_cases=test_cases,
         raw_output=raw_output,
-        success=failed == 0 and errors == 0,
+        success=failed == 0 and errors == 0 and (passed + skipped) > 0,
     )
 
 
@@ -306,7 +392,7 @@ def _to_float(value: object) -> float:
     """Coerce *value* to ``float``, defaulting to ``0.0``."""
     try:
         return float(value)  # type: ignore[arg-type]
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return 0.0
 
 

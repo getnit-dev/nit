@@ -13,15 +13,19 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import logging
+import os
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from nit.memory.analytics_collector import get_analytics_collector
 from nit.utils.git import (
     GitHubAPI,
     GitHubAPIError,
     GitOperationError,
+    PullRequestParams,
     add_files,
     commit,
     create_branch,
@@ -34,9 +38,51 @@ from nit.utils.git import (
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from nit.agents.analyzers.bug import BugReport
+    from nit.agents.debuggers import GeneratedFix
     from nit.models.coverage import CoverageReport
 
 logger = logging.getLogger(__name__)
+
+# Minimum number of URL parts required to extract "pull" segment
+_MIN_URL_PARTS_FOR_PR = 2
+
+# Resolve full paths for executables
+_GIT_PATH = shutil.which("git") or "git"
+_GH_PATH = shutil.which("gh") or "gh"
+
+
+def _run_subprocess(
+    cmd: list[str],
+    *,
+    cwd: Path | str | None = None,
+    capture_output: bool = True,
+    text: bool = True,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    """Run a subprocess command safely.
+
+    This is a thin wrapper around subprocess.run that centralises all
+    subprocess invocations for this module, using fully-resolved executable
+    paths.
+
+    Args:
+        cmd: Command and arguments to run.
+        cwd: Working directory.
+        capture_output: Capture stdout/stderr.
+        text: Decode output as text.
+        check: Raise on non-zero exit code.
+
+    Returns:
+        Completed process result.
+    """
+    return subprocess.run(
+        cmd,
+        cwd=cwd,
+        capture_output=capture_output,
+        text=text,
+        check=check,
+    )
 
 
 @dataclass
@@ -102,15 +148,16 @@ class GitHubPRReporter:
         self,
         repo_path: Path,
         *,
-        github_token: str | None = None,
         base_branch: str = "main",
         use_gh_cli: bool | None = None,
     ) -> None:
         """Initialize the GitHub PR reporter.
 
+        The GitHub token is read from the GITHUB_TOKEN environment variable
+        when API mode is used.
+
         Args:
             repo_path: Path to the git repository.
-            github_token: GitHub personal access token (only needed for API mode).
             base_branch: Base branch to create PRs against.
             use_gh_cli: Force gh CLI usage. If None, auto-detect.
 
@@ -132,7 +179,8 @@ class GitHubPRReporter:
             self._api = None
         else:
             logger.info("Using GitHub API for PR creation")
-            self._api = GitHubAPI(token=github_token)
+            token = os.environ.get("GITHUB_TOKEN")
+            self._api = GitHubAPI(token=token)
 
         # Parse repository info from remote URL
         remote_url = get_remote_url(self._repo_path)
@@ -214,16 +262,30 @@ class GitHubPRReporter:
 
             # Return to original branch
             try:
-                subprocess.run(  # noqa: S603
-                    ["git", "checkout", original_branch],  # noqa: S607
+                _run_subprocess(
+                    [_GIT_PATH, "checkout", original_branch],
                     cwd=self._repo_path,
-                    capture_output=True,
-                    text=True,
-                    check=True,
                 )
                 logger.info("Returned to original branch: %s", original_branch)
             except subprocess.CalledProcessError:
                 logger.warning("Failed to return to original branch %s", original_branch)
+
+            # Record PR creation to analytics
+            if result.success and result.pr_url:
+                try:
+                    collector = get_analytics_collector(self._repo_path)
+                    collector.record_pr_created(
+                        pr_url=result.pr_url,
+                        files=summary.files_created,
+                        metadata={
+                            "tests_generated": summary.tests_generated,
+                            "tests_passed": summary.tests_passed,
+                            "tests_failed": summary.tests_failed,
+                            "draft": draft,
+                        },
+                    )
+                except Exception:
+                    logger.exception("Failed to record PR creation to analytics")
 
             return result
 
@@ -238,6 +300,127 @@ class GitHubPRReporter:
             return PRCreationResult(
                 success=False,
                 error="Unexpected error during PR creation",
+            )
+
+    def create_fix_pr(
+        self,
+        bug_report: BugReport,
+        fix: GeneratedFix,
+        file_path: str,
+        *,
+        draft: bool = False,
+    ) -> PRCreationResult:
+        """Create a PR for a single bug fix.
+
+        This method:
+        1. Creates a new branch (nit/fix-<bug-slug>-<hash>)
+        2. Applies the fix to the source file
+        3. Commits the fix
+        4. Pushes the branch to origin
+        5. Creates a pull request
+
+        Args:
+            bug_report: The bug that was fixed.
+            fix: The generated fix.
+            file_path: Path to the file being fixed.
+            draft: Whether to create as a draft PR.
+
+        Returns:
+            Result of PR creation operation.
+        """
+        try:
+            # Save current branch to return to later
+            original_branch = get_current_branch(self._repo_path)
+            logger.info("Currently on branch: %s", original_branch)
+
+            # Generate branch name based on bug title
+            branch_name = self._generate_fix_branch_name(bug_report)
+
+            # Create and switch to new branch
+            create_branch(self._repo_path, branch_name, base=self._base_branch)
+
+            # Apply the fix
+            target_path = self._repo_path / file_path
+            target_path.write_text(fix.fixed_code, encoding="utf-8")
+
+            # Add the fixed file
+            add_files(self._repo_path, [file_path])
+
+            # Commit changes
+            commit_message = self._generate_fix_commit_message(bug_report, fix)
+            _commit_sha = commit(self._repo_path, commit_message)
+
+            # Push to remote
+            push_branch(self._repo_path, branch_name)
+
+            # Create PR
+            pr_title = self._generate_fix_pr_title(bug_report)
+            pr_body = self._generate_fix_pr_body(bug_report, fix, file_path)
+
+            if self._use_gh_cli:
+                result = self._create_pr_with_gh_cli(
+                    branch_name=branch_name,
+                    title=pr_title,
+                    body=pr_body,
+                    draft=draft,
+                )
+            else:
+                result = self._create_pr_with_api(
+                    branch_name=branch_name,
+                    title=pr_title,
+                    body=pr_body,
+                    draft=draft,
+                )
+
+            # Return to original branch
+            try:
+                _run_subprocess(
+                    [_GIT_PATH, "checkout", original_branch],
+                    cwd=self._repo_path,
+                )
+                logger.info("Returned to original branch: %s", original_branch)
+            except subprocess.CalledProcessError:
+                logger.warning("Failed to return to original branch %s", original_branch)
+
+            # Record bug fix to analytics
+            if result.success:
+                try:
+                    collector = get_analytics_collector(self._repo_path)
+                    collector.record_bug(
+                        bug_type=bug_report.bug_type.value,
+                        severity=bug_report.severity.value,
+                        status="fixed",
+                        file_path=file_path,
+                        line_number=bug_report.location.line_number,
+                        title=bug_report.title,
+                        pr_url=result.pr_url,
+                    )
+                    if result.pr_url:
+                        collector.record_pr_created(
+                            pr_url=result.pr_url,
+                            files=[file_path],
+                            metadata={
+                                "bug_fix": True,
+                                "bug_type": bug_report.bug_type.value,
+                                "draft": draft,
+                            },
+                        )
+                except Exception:
+                    logger.exception("Failed to record bug fix to analytics")
+
+            return result
+
+        except (GitOperationError, GitHubAPIError) as exc:
+            logger.error("Failed to create fix PR: %s", exc)
+            return PRCreationResult(
+                success=False,
+                error=str(exc),
+            )
+        except Exception:
+            logger.exception("Unexpected error creating fix PR")
+            return PRCreationResult(
+                success=False,
+                error="Unexpected error during fix PR creation",
             )
 
     def _generate_branch_name(self, files: list[str]) -> str:
@@ -435,6 +618,149 @@ class GitHubPRReporter:
             ]
         )
 
+    def _generate_fix_branch_name(self, bug_report: BugReport) -> str:
+        """Generate a unique branch name for a bug fix.
+
+        Args:
+            bug_report: The bug being fixed.
+
+        Returns:
+            Branch name like nit/fix-division-by-zero-abc123
+        """
+        # Create a slug from the bug title
+        slug = bug_report.title.lower()
+        slug = re.sub(r"[^a-z0-9]+", "-", slug)
+        slug = slug.strip("-")[:40]  # Limit length
+
+        # Create hash for uniqueness
+        content = f"{bug_report.title}{bug_report.location.file_path}"
+        hash_obj = hashlib.sha256(content.encode())
+        hash_str = hash_obj.hexdigest()[:8]
+
+        return f"nit/fix-{slug}-{hash_str}"
+
+    def _generate_fix_commit_message(self, bug_report: BugReport, fix: GeneratedFix) -> str:
+        """Generate commit message for a bug fix.
+
+        Args:
+            bug_report: The bug being fixed.
+            fix: The generated fix.
+
+        Returns:
+            Formatted commit message.
+        """
+        lines = [
+            f"fix: {bug_report.title}",
+            "",
+            fix.explanation,
+            "",
+            f"Bug type: {bug_report.bug_type.value}",
+            f"Severity: {bug_report.severity.value}",
+            f"Location: {bug_report.location.file_path}:{bug_report.location.line_number}",
+            "",
+            "Co-Authored-By: nit <noreply@getnit.dev>",
+        ]
+
+        return "\n".join(lines)
+
+    def _generate_fix_pr_title(self, bug_report: BugReport) -> str:
+        """Generate PR title for a bug fix.
+
+        Args:
+            bug_report: The bug being fixed.
+
+        Returns:
+            PR title.
+        """
+        return f"fix: {bug_report.title}"
+
+    def _generate_fix_pr_body(
+        self, bug_report: BugReport, fix: GeneratedFix, file_path: str
+    ) -> str:
+        """Generate PR body for a bug fix.
+
+        Args:
+            bug_report: The bug being fixed.
+            fix: The generated fix.
+            file_path: Path to the fixed file.
+
+        Returns:
+            Formatted markdown PR body.
+        """
+        sections: list[str] = [
+            "## 🐛 Bug Fix",
+            "",
+            f"This PR fixes a **{bug_report.bug_type.value}** bug detected by nit.",
+            "",
+            "### 📋 Bug Details",
+            "",
+            f"- **Title:** {bug_report.title}",
+            f"- **Severity:** {bug_report.severity.value}",
+            f"- **Type:** {bug_report.bug_type.value}",
+            f"- **Location:** `{bug_report.location.file_path}:{bug_report.location.line_number}`",
+        ]
+
+        if bug_report.location.function_name:
+            sections.append(f"- **Function:** `{bug_report.location.function_name}`")
+
+        sections.extend(
+            [
+                "",
+                "### 📝 Description",
+                "",
+                bug_report.description,
+                "",
+            ]
+        )
+
+        if bug_report.error_message:
+            sections.extend(
+                [
+                    "### ⚠️ Error Message",
+                    "",
+                    f"```\n{bug_report.error_message}\n```",
+                    "",
+                ]
+            )
+
+        sections.extend(
+            [
+                "### 🔧 Fix Applied",
+                "",
+                fix.explanation,
+                "",
+                f"**File modified:** `{file_path}`",
+                "",
+            ]
+        )
+
+        if fix.safety_notes:
+            sections.extend(
+                [
+                    "### 🛡️ Safety Notes",
+                    "",
+                ]
+            )
+            sections.extend(f"- {note}" for note in fix.safety_notes)
+            sections.append("")
+
+        sections.extend(
+            [
+                "---",
+                "",
+                "🤖 Generated by [nit](https://github.com/getnit-dev/nit)",
+                "",
+                "### Review Checklist",
+                "",
+                "- [ ] Review the fix for correctness",
+                "- [ ] Verify tests pass in CI",
+                "- [ ] Check for edge cases",
+                "- [ ] Ensure no regressions",
+            ]
+        )
+
+        return "\n".join(sections)
+
     def _create_pr_with_gh_cli(
         self,
         branch_name: str,
@@ -459,7 +785,7 @@ class GitHubPRReporter:
         """
         try:
             cmd = [
-                "gh",
+                _GH_PATH,
                 "pr",
                 "create",
                 "--base",
@@ -475,13 +801,7 @@ class GitHubPRReporter:
             if draft:
                 cmd.append("--draft")
 
-            result = subprocess.run(  # noqa: S603
-                cmd,
-                cwd=self._repo_path,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
+            result = _run_subprocess(cmd, cwd=self._repo_path)
 
             # gh CLI outputs the PR URL
             pr_url = result.stdout.strip()
@@ -490,7 +810,7 @@ class GitHubPRReporter:
             pr_number = None
             if pr_url:
                 parts = pr_url.rstrip("/").split("/")
-                if len(parts) >= 2 and parts[-2] == "pull":  # noqa: PLR2004
+                if len(parts) >= _MIN_URL_PARTS_FOR_PR and parts[-2] == "pull":
                     with contextlib.suppress(ValueError):
                         pr_number = int(parts[-1])
 
@@ -536,13 +856,15 @@ class GitHubPRReporter:
             raise GitHubAPIError("Repository owner/name not available")
 
         response = self._api.create_pull_request(
-            owner=self._owner,
-            repo=self._repo,
-            title=title,
-            body=body,
-            head=branch_name,
-            base=self._base_branch,
-            draft=draft,
+            PullRequestParams(
+                owner=self._owner,
+                repo=self._repo,
+                title=title,
+                body=body,
+                head=branch_name,
+                base=self._base_branch,
+                draft=draft,
+            )
         )
 
         pr_url = response.get("html_url", "")

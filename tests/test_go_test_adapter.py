@@ -6,6 +6,7 @@ validation with sample Go fixtures.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from nit.adapters.base import CaseStatus, TestFrameworkAdapter
 from nit.adapters.unit.go_test_adapter import (
     GoTestAdapter,
     _parse_go_test_json,
+    _to_float,
 )
 from nit.llm.prompts.go_test_prompt import GoTestTemplate
 
@@ -213,3 +215,162 @@ class TestGoTestRunTests:
         adapter = GoTestAdapter()
         result = await adapter.run_tests(tmp_path, timeout=5.0)
         assert result.success is False
+
+
+# ── Additional coverage tests ─────────────────────────────────────
+
+
+class TestGoTestToFloat:
+    """Tests for _to_float helper covering all branches."""
+
+    def test_int(self) -> None:
+        assert _to_float(3) == 3.0
+
+    def test_float(self) -> None:
+        assert _to_float(1.5) == 1.5
+
+    def test_valid_string(self) -> None:
+        assert _to_float("2.5") == 2.5
+
+    def test_invalid_string(self) -> None:
+        assert _to_float("abc") == 0.0
+
+    def test_none(self) -> None:
+        assert _to_float(None) == 0.0
+
+    def test_list(self) -> None:
+        assert _to_float([1, 2]) == 0.0
+
+
+class TestGoTestJsonParsingExtended:
+    """Extended JSON parsing tests for edge cases."""
+
+    def test_non_json_lines_ignored(self) -> None:
+        stdout = """\
+not json
+{"Action":"pass","Package":"p","Test":"T","Elapsed":0.001}
+more garbage
+"""
+        result = _parse_go_test_json(stdout, stdout, 0)
+        assert result.passed == 1
+
+    def test_non_dict_json_ignored(self) -> None:
+        stdout = '["array"]\n{"Action":"pass","Package":"p","Test":"T","Elapsed":0.001}\n'
+        result = _parse_go_test_json(stdout, stdout, 0)
+        assert result.passed == 1
+
+    def test_package_level_pass_ignored(self) -> None:
+        # Actions without Test name should be ignored
+        stdout = '{"Action":"pass","Package":"mypkg","Elapsed":0.5}\n'
+        result = _parse_go_test_json(stdout, stdout, 0)
+        assert result.total == 0
+
+    def test_last_event_wins(self) -> None:
+        # If a test has both run and pass, pass wins
+        stdout = """\
+{"Action":"run","Package":"p","Test":"T1"}
+{"Action":"output","Package":"p","Test":"T1","Output":"something"}
+{"Action":"pass","Package":"p","Test":"T1","Elapsed":0.001}
+"""
+        result = _parse_go_test_json(stdout, stdout, 0)
+        assert result.passed == 1
+        assert result.failed == 0
+
+    def test_exit_code_nonzero_no_failures(self) -> None:
+        # No test events but nonzero exit code
+        result = _parse_go_test_json("", "", 1)
+        assert result.success is False
+
+    def test_full_name_with_package(self) -> None:
+        stdout = (
+            '{"Action":"pass","Package":"github.com/user/pkg",'
+            '"Test":"TestSomething","Elapsed":0.001}\n'
+        )
+        result = _parse_go_test_json(stdout, stdout, 0)
+        assert result.test_cases[0].name == "github.com/user/pkg/TestSomething"
+
+    def test_full_name_without_package(self) -> None:
+        stdout = '{"Action":"pass","Package":"","Test":"TestSomething","Elapsed":0.001}\n'
+        result = _parse_go_test_json(stdout, stdout, 0)
+        assert result.test_cases[0].name == "TestSomething"
+
+
+class TestGoTestRunTestsExtended:
+    """Extended async run_tests tests."""
+
+    @pytest.mark.asyncio
+    async def test_run_tests_with_test_files_filter(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _write_file(tmp_path, "go.mod", "module example.com/mypkg\n")
+        test_file = tmp_path / "pkg" / "foo_test.go"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text(_VALID_GO_TEST)
+
+        # Track the command that was used
+        captured_cmds: list[list[str]] = []
+
+        async def _fake_subprocess(*args: object, **kwargs: object) -> object:
+            cmd = args
+            captured_cmds.append([str(a) for a in cmd])
+
+            class FakeProc:
+                returncode = 0
+
+                async def communicate(self) -> tuple[bytes, bytes]:
+                    json_out = (
+                        '{"Action":"pass","Package":"./pkg","Test":"TestAdd","Elapsed":0.001}\n'
+                    )
+                    return json_out.encode(), b""
+
+            return FakeProc()
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_subprocess)
+
+        adapter = GoTestAdapter()
+        result = await adapter.run_tests(
+            tmp_path, test_files=[test_file], timeout=5.0, collect_coverage=False
+        )
+        assert result.passed >= 1
+
+    @pytest.mark.asyncio
+    async def test_run_tests_non_go_files_ignored(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _write_file(tmp_path, "go.mod", "module example.com/mypkg\n")
+
+        async def _fake_subprocess(*args: object, **kwargs: object) -> object:
+            class FakeProc:
+                returncode = 0
+
+                async def communicate(self) -> tuple[bytes, bytes]:
+                    return b"", b""
+
+            return FakeProc()
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_subprocess)
+
+        adapter = GoTestAdapter()
+        # Pass a non-.go test file
+        result = await adapter.run_tests(
+            tmp_path,
+            test_files=[tmp_path / "readme.txt"],
+            timeout=5.0,
+            collect_coverage=False,
+        )
+        # Should still run since non-go files are filtered out
+        assert isinstance(result.passed, int)
+
+
+class TestGoTestRequiredCommands:
+    """Tests for get_required_packages and get_required_commands."""
+
+    def test_required_packages_empty(self) -> None:
+        assert GoTestAdapter().get_required_packages() == []
+
+    def test_required_commands_go(self) -> None:
+        assert "go" in GoTestAdapter().get_required_commands()

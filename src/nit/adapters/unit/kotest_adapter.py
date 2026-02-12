@@ -8,6 +8,7 @@ path as JUnit 5).
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -19,10 +20,13 @@ from nit.adapters.base import (
     TestFrameworkAdapter,
     ValidationResult,
 )
+from nit.adapters.coverage.jacoco import JaCoCoAdapter
 from nit.llm.prompts.kotest_prompt import KotestTemplate
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────
 
@@ -101,16 +105,38 @@ class KotestAdapter(TestFrameworkAdapter):
         *,
         test_files: list[Path] | None = None,
         timeout: float = _DEFAULT_TIMEOUT,
+        collect_coverage: bool = True,
     ) -> RunResult:
-        """Execute Kotest via Gradle or Maven and parse JUnit XML output."""
+        """Execute Kotest via Gradle or Maven and parse JUnit XML output.
+
+        Optionally collects coverage using JaCoCoAdapter.
+        """
         if _has_gradle(project_path):
-            return await _run_gradle_tests(project_path, test_files, timeout)
-        if _has_maven(project_path):
-            return await _run_maven_tests(project_path, test_files, timeout)
-        return RunResult(
-            raw_output="No Gradle or Maven build found; cannot run Kotest.",
-            success=False,
-        )
+            result = await _run_gradle_tests(project_path, test_files, timeout)
+        elif _has_maven(project_path):
+            result = await _run_maven_tests(project_path, test_files, timeout)
+        else:
+            return RunResult(
+                raw_output="No Gradle or Maven build found; cannot run Kotest.",
+                success=False,
+            )
+
+        # Collect coverage if requested
+        if collect_coverage:
+            try:
+                coverage_adapter = JaCoCoAdapter()
+                coverage_report = await coverage_adapter.run_coverage(
+                    project_path, test_files=test_files, timeout=timeout
+                )
+                result.coverage = coverage_report
+                logger.info(
+                    "Coverage collected: %.1f%% line coverage",
+                    coverage_report.overall_line_coverage,
+                )
+            except Exception as e:
+                logger.warning("Failed to collect coverage: %s", e)
+
+        return result
 
     def validate_test(self, _test_code: str) -> ValidationResult:
         """Kotlin is not in tree-sitter supported languages; skip syntax check.

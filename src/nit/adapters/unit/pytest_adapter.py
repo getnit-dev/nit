@@ -19,12 +19,14 @@ from nit.adapters.base import (
     TestFrameworkAdapter,
     ValidationResult,
 )
+from nit.adapters.coverage.coverage_py_adapter import CoveragePyAdapter
 from nit.llm.prompts.pytest_prompt import PytestTemplate
 from nit.parsing.treesitter import (
     collect_error_ranges,
     has_parse_errors,
     parse_code,
 )
+from nit.utils.prerequisites import detect_python_environment, get_command_path
 
 logger = logging.getLogger(__name__)
 
@@ -107,23 +109,20 @@ class PytestAdapter(TestFrameworkAdapter):
         *,
         test_files: list[Path] | None = None,
         timeout: float = _DEFAULT_TIMEOUT,
+        collect_coverage: bool = True,
     ) -> RunResult:
         """Execute pytest via subprocess and parse JSON report output.
 
         Runs ``pytest --json-report --json-report-file=-`` inside
         *project_path*.  If *test_files* is provided, only those files
-        are executed.
+        are executed. Optionally collects coverage using CoveragePyAdapter.
         """
-        # Try to find pytest in virtualenv first, fallback to system pytest
+        # Use robust environment detection to find pytest
         pytest_cmd = "pytest"
-        venv_pytest = project_path / ".venv" / "bin" / "pytest"
-        if venv_pytest.exists():
-            pytest_cmd = str(venv_pytest)
-        else:
-            # Try alternative venv name
-            venv_pytest_alt = project_path / "venv" / "bin" / "pytest"
-            if venv_pytest_alt.exists():
-                pytest_cmd = str(venv_pytest_alt)
+        env = detect_python_environment(project_path)
+        pytest_path = get_command_path("pytest", env)
+        if pytest_path:
+            pytest_cmd = str(pytest_path)
 
         # Use a temp file for JSON report since --json-report-file=- doesn't work reliably
         json_report_file = None
@@ -173,7 +172,25 @@ class PytestAdapter(TestFrameworkAdapter):
             if json_report_file and json_report_file.exists():
                 json_content = json_report_file.read_text(encoding="utf-8")
 
-            return _parse_pytest_json(json_content, raw_output)
+            result = _parse_pytest_json(json_content, raw_output)
+
+            # Collect coverage if requested
+            if collect_coverage:
+                try:
+                    coverage_adapter = CoveragePyAdapter()
+                    coverage_report = await coverage_adapter.run_coverage(
+                        project_path, test_files=test_files, timeout=timeout
+                    )
+                    result.coverage = coverage_report
+                    logger.info(
+                        "Coverage collected: %.1f%% line coverage",
+                        coverage_report.overall_line_coverage,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to collect coverage: %s", e)
+                    # Don't fail the test run if coverage collection fails
+
+            return result
 
         finally:
             # Clean up temp file
@@ -185,6 +202,14 @@ class PytestAdapter(TestFrameworkAdapter):
     def validate_test(self, test_code: str) -> ValidationResult:
         """Parse *test_code* with tree-sitter Python and report syntax errors."""
         return _validate_python(test_code)
+
+    def get_required_packages(self) -> list[str]:
+        """Return required packages for pytest."""
+        return ["pytest", "pytest-json-report"]
+
+    def get_required_commands(self) -> list[str]:
+        """Return required commands for pytest."""
+        return ["python"]
 
 
 # ── Detection helpers ────────────────────────────────────────────
@@ -345,7 +370,7 @@ def _parse_pytest_json(stdout: str, raw_output: str) -> RunResult:
         duration_ms=duration_ms,
         test_cases=test_cases,
         raw_output=raw_output,
-        success=failed == 0 and errors == 0,
+        success=failed == 0 and errors == 0 and (passed + skipped) > 0,
     )
 
 
@@ -391,7 +416,7 @@ def _to_float(value: object) -> float:
     """Coerce *value* to ``float``, defaulting to ``0.0``."""
     try:
         return float(value)  # type: ignore[arg-type]
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return 0.0
 
 

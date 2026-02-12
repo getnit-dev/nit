@@ -1,0 +1,20 @@
+/* nit brand colors
+   Logo: dark navy #071326, lime green #c8ff3d, blue accent #2f8cff */
+
+/* Light mode */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #071326;
+  --md-primary-fg-color--light: #0d2040;
+  --md-primary-fg-color--dark: #030912;
+  --md-accent-fg-color: #2f8cff;
+  --md-accent-fg-color--transparent: rgba(47, 140, 255, 0.1);
+}
+
+/* Dark mode */
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #071326;
+  --md-primary-fg-color--light: #0d2040;
+  --md-primary-fg-color--dark: #030912;
+  --md-accent-fg-color: #c8ff3d;
+  --md-accent-fg-color--transparent: rgba(200, 255, 61, 0.1);
+}

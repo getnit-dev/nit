@@ -2,23 +2,30 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from nit.adapters.base import CaseResult, CaseStatus, RunResult
 from nit.agents.analyzers.integration_deps import (
+    DetectedDependency,
+    IntegrationDependencyReport,
     IntegrationDependencyType,
     detect_integration_dependencies,
 )
 from nit.agents.base import TaskInput, TaskStatus
 from nit.agents.builders.integration import IntegrationBuilder, IntegrationBuildTask
-from nit.llm.engine import GenerationRequest, LLMResponse
+from nit.agents.builders.unit import BuildTask, FailureType, ValidationAttempt
+from nit.llm.engine import GenerationRequest, LLMError, LLMResponse
+from nit.llm.prompts.integration_test import (
+    IntegrationTestTemplate,
+    JestIntegrationTemplate,
+    PytestIntegrationTemplate,
+    VitestIntegrationTemplate,
+)
 from nit.parsing.languages import extract_from_file
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
 
 # ── Fixtures ─────────────────────────────────────────────────────────
 
@@ -569,3 +576,1039 @@ async def test_integration_builder_invalid_source_file(
 
     assert result.status == TaskStatus.FAILED
     assert len(result.errors) > 0
+
+
+# ── Additional IntegrationBuilder coverage tests ─────────────────────
+
+
+def test_integration_build_task_explicit_target() -> None:
+    """Test IntegrationBuildTask keeps explicit target when provided."""
+    task = IntegrationBuildTask(
+        source_file="src/api_client.py",
+        framework="pytest",
+        target="custom_target",
+    )
+    assert task.target == "custom_target"
+
+
+def test_builder_properties(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test name and description properties."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    assert builder.name == "integration_builder"
+    assert "integration" in builder.description.lower()
+
+
+def test_resolve_path_absolute(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _resolve_path returns absolute paths unchanged."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    abs_path = Path("/absolute/path/file.py")
+    assert builder._resolve_path("/absolute/path/file.py") == abs_path
+
+
+def test_resolve_path_relative(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _resolve_path resolves relative paths to project root."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    resolved = builder._resolve_path("src/file.py")
+    assert resolved == pytest_project / "src" / "file.py"
+
+
+def test_get_integration_template_pytest(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _get_integration_template returns PytestIntegrationTemplate."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    template = builder._get_integration_template("pytest")
+    assert isinstance(template, PytestIntegrationTemplate)
+
+
+def test_get_integration_template_vitest(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _get_integration_template returns VitestIntegrationTemplate."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    template = builder._get_integration_template("vitest")
+    assert isinstance(template, VitestIntegrationTemplate)
+
+
+def test_get_integration_template_jest(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _get_integration_template returns JestIntegrationTemplate."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    template = builder._get_integration_template("jest")
+    assert isinstance(template, JestIntegrationTemplate)
+
+
+def test_get_integration_template_fallback(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _get_integration_template falls back to generic template."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    template = builder._get_integration_template("unknown_framework")
+    assert type(template) is IntegrationTestTemplate
+
+
+def test_handle_generation_error_value_error(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _handle_generation_error with ValueError."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    result = builder._handle_generation_error(ValueError("bad input"))
+    assert result.status == TaskStatus.FAILED
+    assert "Invalid input" in result.errors[0]
+
+
+def test_handle_generation_error_llm_error(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _handle_generation_error with LLMError."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    result = builder._handle_generation_error(LLMError("model failure"))
+    assert result.status == TaskStatus.FAILED
+    assert "LLM error" in result.errors[0]
+
+
+def test_handle_generation_error_unexpected(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _handle_generation_error with unexpected exception."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    result = builder._handle_generation_error(RuntimeError("oops"))
+    assert result.status == TaskStatus.FAILED
+    assert "Unexpected error" in result.errors[0]
+
+
+def test_handle_generation_error_llm_error_updates_memory(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _handle_generation_error with LLMError updates memory stats."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=True,
+    )
+    # Replace memory with a mock
+    builder._memory = MagicMock()
+    builder._handle_generation_error(LLMError("fail"))
+    builder._memory.update_stats.assert_called_once_with(successful=False)
+
+
+def test_add_integration_info_no_messages_attr(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _add_integration_info_to_prompt with object lacking messages."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    report = IntegrationDependencyReport(
+        source_path=pytest_project / "file.py",
+        language="python",
+    )
+    # Should not raise — silently return
+    builder._add_integration_info_to_prompt(object(), report)
+
+
+def test_add_integration_info_no_dependencies(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _add_integration_info_to_prompt with no dependencies."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    report = IntegrationDependencyReport(
+        source_path=pytest_project / "file.py",
+        language="python",
+    )
+    rendered = SimpleNamespace(messages=[])
+    builder._add_integration_info_to_prompt(rendered, report)
+    assert len(rendered.messages) == 1
+    assert "No external dependencies detected" in rendered.messages[0].content
+
+
+def test_add_integration_info_with_dependencies(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _add_integration_info_to_prompt with dependencies."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    dep = DetectedDependency(
+        dependency_type=IntegrationDependencyType.HTTP_CLIENT,
+        module_name="requests",
+        pattern_matched="requests",
+        used_in_functions=["fetch_data"],
+        mock_strategies=["responses", "unittest.mock.patch"],
+    )
+    report = IntegrationDependencyReport(
+        source_path=pytest_project / "file.py",
+        language="python",
+        dependencies=[dep],
+        needs_integration_tests=True,
+        recommended_fixtures=["http_mock_fixture"],
+    )
+    rendered = SimpleNamespace(messages=[])
+    builder._add_integration_info_to_prompt(rendered, report)
+    content = rendered.messages[0].content
+    assert "HTTP_CLIENT" in content
+    assert "requests" in content
+    assert "fetch_data" in content
+    assert "responses" in content
+    assert "http_mock_fixture" in content
+
+
+def test_classify_test_failure_missing_dep(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _classify_test_failure identifies missing dependency."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    result = RunResult(
+        failed=1,
+        test_cases=[
+            CaseResult(
+                name="test_it",
+                status=CaseStatus.FAILED,
+                failure_message="ModuleNotFoundError: No module named 'foo'",
+            )
+        ],
+    )
+    assert builder._classify_test_failure(result) == FailureType.MISSING_DEP
+
+
+def test_classify_test_failure_test_bug(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _classify_test_failure identifies test bug."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    result = RunResult(
+        failed=1,
+        test_cases=[
+            CaseResult(
+                name="test_it",
+                status=CaseStatus.FAILED,
+                failure_message="AssertionError: expected 1 but got 2",
+            )
+        ],
+    )
+    assert builder._classify_test_failure(result) == FailureType.TEST_BUG
+
+
+def test_classify_test_failure_default(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _classify_test_failure defaults to TEST_BUG for unknown errors."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    result = RunResult(
+        failed=1,
+        test_cases=[
+            CaseResult(
+                name="test_it",
+                status=CaseStatus.FAILED,
+                failure_message="some random error not in patterns",
+            )
+        ],
+    )
+    assert builder._classify_test_failure(result) == FailureType.TEST_BUG
+
+
+def test_extract_error_message_from_test_cases(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _extract_error_message extracts from test cases."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    result = RunResult(
+        failed=2,
+        test_cases=[
+            CaseResult(
+                name="test_a",
+                status=CaseStatus.FAILED,
+                failure_message="Error A",
+            ),
+            CaseResult(
+                name="test_b",
+                status=CaseStatus.FAILED,
+                failure_message="Error B",
+            ),
+        ],
+    )
+    msg = builder._extract_error_message(result)
+    assert "test_a" in msg
+    assert "Error A" in msg
+
+
+def test_extract_error_message_from_raw_output(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _extract_error_message falls back to raw output."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    result = RunResult(
+        failed=1,
+        raw_output="FATAL: something went wrong in the test runner",
+        test_cases=[],
+    )
+    msg = builder._extract_error_message(result)
+    assert "something went wrong" in msg
+
+
+def test_get_memory_context_disabled(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _get_memory_context returns None when memory disabled."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    assert builder._get_memory_context("pytest") is None
+
+
+def test_add_memory_to_prompt_no_messages_attr(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _add_memory_to_prompt with object lacking messages."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    # Should not raise
+    builder._add_memory_to_prompt(object(), {"known_patterns": [], "failed_patterns": []})
+
+
+def test_add_memory_to_prompt_empty_context(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _add_memory_to_prompt with empty patterns does nothing."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    rendered = SimpleNamespace(messages=[])
+    builder._add_memory_to_prompt(rendered, {"known_patterns": [], "failed_patterns": []})
+    assert len(rendered.messages) == 0
+
+
+def test_add_memory_to_prompt_with_patterns(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Test _add_memory_to_prompt adds guidance when patterns exist."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    rendered = SimpleNamespace(messages=[])
+    builder._add_memory_to_prompt(
+        rendered,
+        {
+            "known_patterns": ["pattern_a"],
+            "failed_patterns": ["pattern_b: reason"],
+        },
+    )
+    assert len(rendered.messages) == 1
+    assert "pattern_a" in rendered.messages[0].content
+    assert "pattern_b" in rendered.messages[0].content
+
+
+# ── Validation Pipeline, Execute Test, and Retry Tests ────────────────
+
+
+@pytest.mark.asyncio
+async def test_validation_pipeline_disabled(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """Validation pipeline returns early when disabled."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+        validation_config={"enabled": False},
+    )
+
+    adapter = MagicMock()
+    task = IntegrationBuildTask(source_file="src/api_client.py", framework="pytest")
+    request = GenerationRequest(messages=[])
+
+    attempts, code, attempt = await builder._run_validation_pipeline(
+        "test code", adapter, task, request
+    )
+
+    assert attempts == []
+    assert code == "test code"
+    assert attempt is None
+
+
+@pytest.mark.asyncio
+async def test_validation_pipeline_passes_first_attempt(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+    tmp_path: Path,
+) -> None:
+    """Validation passes on first attempt."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+        validation_config={"enabled": True, "max_retries": 2},
+    )
+
+    adapter = MagicMock()
+    adapter.validate_test.return_value = MagicMock(valid=True, errors=[])
+    adapter.get_test_pattern.return_value = ["**/*.py"]
+
+    success_result = RunResult(passed=2, failed=0, skipped=0, errors=0, success=True)
+    adapter.run_tests = AsyncMock(return_value=success_result)
+
+    task = IntegrationBuildTask(
+        source_file="src/api_client.py",
+        framework="pytest",
+        output_file=str(tmp_path / "test_output.py"),
+    )
+    request = GenerationRequest(messages=[])
+
+    attempts, code, _attempt = await builder._run_validation_pipeline(
+        "test code", adapter, task, request
+    )
+
+    assert len(attempts) == 1
+    assert attempts[0].syntax_valid is True
+    assert code == "test code"
+
+
+@pytest.mark.asyncio
+async def test_validation_pipeline_retries_on_failure(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+    tmp_path: Path,
+) -> None:
+    """Validation retries when test execution fails."""
+    # First generate call returns original code, retry returns fixed code
+    call_count = 0
+
+    async def mock_generate(request: GenerationRequest) -> LLMResponse:
+        nonlocal call_count
+        call_count += 1
+        return LLMResponse(
+            text=f"fixed test code {call_count}",
+            model="gpt-4o",
+            prompt_tokens=100,
+            completion_tokens=50,
+        )
+
+    mock_llm_engine.configure_mock(generate=AsyncMock(side_effect=mock_generate))
+
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+        validation_config={"enabled": True, "max_retries": 3},
+    )
+
+    adapter = MagicMock()
+    adapter.validate_test.return_value = MagicMock(valid=True, errors=[])
+    adapter.get_test_pattern.return_value = ["**/*.py"]
+
+    fail_result = RunResult(
+        passed=0,
+        failed=1,
+        skipped=0,
+        errors=0,
+        success=False,
+        test_cases=[
+            CaseResult(
+                name="test_it",
+                status=CaseStatus.FAILED,
+                failure_message="AssertionError: expected 1 but got 2",
+            )
+        ],
+    )
+    success_result = RunResult(passed=1, failed=0, skipped=0, errors=0, success=True)
+    adapter.run_tests = AsyncMock(side_effect=[fail_result, success_result])
+
+    task = IntegrationBuildTask(
+        source_file="src/api_client.py",
+        framework="pytest",
+        output_file=str(tmp_path / "test_output.py"),
+    )
+    request = GenerationRequest(messages=[])
+
+    attempts, _code, attempt = await builder._run_validation_pipeline(
+        "original code", adapter, task, request
+    )
+
+    assert len(attempts) >= 2
+    assert attempt is not None
+    assert attempt.syntax_valid is True
+
+
+@pytest.mark.asyncio
+async def test_validation_pipeline_syntax_failure(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+    tmp_path: Path,
+) -> None:
+    """Validation handles syntax failure correctly."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+        validation_config={"enabled": True, "max_retries": 1},
+    )
+
+    adapter = MagicMock()
+    adapter.validate_test.return_value = MagicMock(valid=False, errors=["SyntaxError on line 1"])
+    adapter.get_test_pattern.return_value = ["**/*.py"]
+
+    task = IntegrationBuildTask(
+        source_file="src/api_client.py",
+        framework="pytest",
+        output_file=str(tmp_path / "test_output.py"),
+    )
+    request = GenerationRequest(messages=[])
+
+    attempts, _code, _attempt = await builder._run_validation_pipeline(
+        "bad syntax", adapter, task, request
+    )
+
+    assert len(attempts) == 1
+    assert attempts[0].syntax_valid is False
+    assert attempts[0].failure_type == FailureType.TEST_BUG
+
+
+@pytest.mark.asyncio
+async def test_execute_test_success(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+    tmp_path: Path,
+) -> None:
+    """_execute_test runs adapter and returns success."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+
+    adapter = MagicMock()
+    success_result = RunResult(passed=2, failed=0, skipped=0, errors=0, success=True)
+    adapter.run_tests = AsyncMock(return_value=success_result)
+
+    test_file = tmp_path / "test_integration.py"
+
+    result, failure_type, error_msg = await builder._execute_test(
+        "def test_foo(): pass", adapter, test_file
+    )
+
+    assert result is not None
+    assert result.success is True
+    assert failure_type is None
+    assert error_msg == ""
+
+
+@pytest.mark.asyncio
+async def test_execute_test_failure(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+    tmp_path: Path,
+) -> None:
+    """_execute_test classifies failure when tests fail."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+
+    adapter = MagicMock()
+    fail_result = RunResult(
+        passed=0,
+        failed=1,
+        skipped=0,
+        errors=0,
+        success=False,
+        test_cases=[
+            CaseResult(
+                name="test_it",
+                status=CaseStatus.FAILED,
+                failure_message="AssertionError: expected 1 but got 2",
+            )
+        ],
+    )
+    adapter.run_tests = AsyncMock(return_value=fail_result)
+
+    test_file = tmp_path / "test_integration.py"
+
+    result, failure_type, error_msg = await builder._execute_test(
+        "def test_foo(): assert False", adapter, test_file
+    )
+
+    assert result is not None
+    assert result.success is False
+    assert failure_type == FailureType.TEST_BUG
+    assert "test_it" in error_msg
+
+
+@pytest.mark.asyncio
+async def test_execute_test_exception(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+    tmp_path: Path,
+) -> None:
+    """_execute_test catches exceptions during execution."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+
+    adapter = MagicMock()
+    adapter.run_tests = AsyncMock(side_effect=RuntimeError("adapter crash"))
+
+    test_file = tmp_path / "test_integration.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+
+    result, failure_type, error_msg = await builder._execute_test(
+        "def test_foo(): pass", adapter, test_file
+    )
+
+    assert result is None
+    assert failure_type == FailureType.UNKNOWN
+    assert "Execution error" in error_msg
+
+
+@pytest.mark.asyncio
+async def test_retry_with_feedback(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """_retry_with_feedback sends error info and returns new code."""
+
+    async def mock_gen(request: GenerationRequest) -> LLMResponse:
+        return LLMResponse(
+            text="fixed integration test code",
+            model="gpt-4o",
+            prompt_tokens=200,
+            completion_tokens=100,
+        )
+
+    mock_llm_engine.configure_mock(generate=AsyncMock(side_effect=mock_gen))
+
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+
+    prev_attempt = ValidationAttempt(
+        attempt=1,
+        test_code="original code",
+        syntax_valid=True,
+        syntax_errors=[],
+        test_result=None,
+        failure_type=FailureType.TEST_BUG,
+        error_message="AssertionError: expected 1",
+    )
+    original_request = GenerationRequest(messages=[])
+
+    new_code = await builder._retry_with_feedback(original_request, prev_attempt)
+
+    assert new_code == "fixed integration test code"
+    mock_llm_engine.generate.assert_called_once()
+
+
+def test_determine_test_file_path_with_output_file(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """_determine_test_file_path uses output_file when provided."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+
+    adapter = MagicMock()
+    task = IntegrationBuildTask(
+        source_file="src/api.py",
+        framework="pytest",
+        output_file="tests/test_api_integration.py",
+    )
+
+    path = builder._determine_test_file_path(task, adapter)
+    assert str(path).endswith("test_api_integration.py")
+
+
+def test_determine_test_file_path_python(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """_determine_test_file_path generates Python path for pytest."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+
+    adapter = MagicMock()
+    adapter.get_test_pattern.return_value = ["**/test_*.py"]
+
+    task = IntegrationBuildTask(source_file="src/api_client.py", framework="pytest")
+
+    path = builder._determine_test_file_path(task, adapter)
+    assert path.suffix == ".py"
+    assert "integration" in path.stem
+
+
+def test_determine_test_file_path_vitest(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """_determine_test_file_path generates TypeScript path for vitest."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+
+    adapter = MagicMock()
+    adapter.get_test_pattern.return_value = ["**/*.test.ts"]
+
+    task = IntegrationBuildTask(source_file="src/api.ts", framework="vitest")
+
+    path = builder._determine_test_file_path(task, adapter)
+    assert ".test.ts" in str(path)
+    assert "integration" in str(path)
+
+
+def test_determine_test_file_path_spec_ts(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """_determine_test_file_path handles .spec.ts patterns."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+
+    adapter = MagicMock()
+    adapter.get_test_pattern.return_value = ["**/*.spec.ts"]
+
+    task = IntegrationBuildTask(source_file="src/api.ts", framework="vitest")
+
+    path = builder._determine_test_file_path(task, adapter)
+    assert ".spec.ts" in str(path)
+
+
+def test_determine_test_file_path_test_js(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """_determine_test_file_path handles .test.js patterns."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+
+    adapter = MagicMock()
+    adapter.get_test_pattern.return_value = ["**/*.test.js"]
+
+    task = IntegrationBuildTask(source_file="src/api.js", framework="jest")
+
+    path = builder._determine_test_file_path(task, adapter)
+    assert ".test.js" in str(path)
+
+
+def test_update_memory_from_validation_success(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """_update_memory_from_validation records success pattern."""
+
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=True,
+    )
+    builder._memory = MagicMock()
+
+    final_attempt = ValidationAttempt(
+        attempt=1,
+        test_code="test code",
+        syntax_valid=True,
+        syntax_errors=[],
+        test_result=MagicMock(success=True),
+        failure_type=None,
+        error_message="",
+    )
+
+    builder._update_memory_from_validation("pytest", [final_attempt], final_attempt)
+
+    builder._memory.update_stats.assert_called_once()
+    builder._memory.add_known_pattern.assert_called_once()
+
+
+def test_update_memory_from_validation_failure(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """_update_memory_from_validation records failure pattern."""
+
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=True,
+    )
+    builder._memory = MagicMock()
+
+    final_attempt = ValidationAttempt(
+        attempt=1,
+        test_code="test code",
+        syntax_valid=False,
+        syntax_errors=["error"],
+        test_result=None,
+        failure_type=FailureType.TEST_BUG,
+        error_message="syntax error",
+    )
+
+    builder._update_memory_from_validation("pytest", [final_attempt], final_attempt)
+
+    builder._memory.update_stats.assert_called_once()
+    builder._memory.add_failed_pattern.assert_called_once()
+
+
+def test_update_memory_from_validation_no_memory(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """_update_memory_from_validation does nothing without memory."""
+
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+
+    final_attempt = ValidationAttempt(
+        attempt=1,
+        test_code="test code",
+        syntax_valid=True,
+        syntax_errors=[],
+        test_result=None,
+        failure_type=None,
+        error_message="",
+    )
+
+    # Should not raise
+    builder._update_memory_from_validation("pytest", [final_attempt], final_attempt)
+
+
+@pytest.mark.asyncio
+async def test_run_accepts_build_task(
+    mock_llm_engine: MagicMock,
+    python_http_client_file: Path,
+    pytest_project: Path,
+) -> None:
+    """IntegrationBuilder.run accepts a BuildTask and converts it."""
+
+    project_root = pytest_project
+    src_in_project = project_root / "src"
+    src_in_project.mkdir(exist_ok=True)
+    (src_in_project / "api_client.py").write_text(python_http_client_file.read_text())
+
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=project_root,
+        enable_memory=False,
+        validation_config={"enabled": False},
+    )
+
+    task = BuildTask(
+        source_file="src/api_client.py",
+        framework="pytest",
+    )
+
+    result = await builder.run(task)
+
+    assert result.status == TaskStatus.COMPLETED
+    assert "test_code" in result.result
+
+
+def test_get_memory_context_with_patterns(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """_get_memory_context returns filtered patterns from memory."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=True,
+    )
+    builder._memory = MagicMock()
+    builder._memory.get_known_patterns.return_value = [
+        {
+            "pattern": "use fixtures",
+            "context": {"language": "pytest", "test_type": "integration"},
+        },
+        {
+            "pattern": "irrelevant",
+            "context": {"language": "rust", "test_type": "unit"},
+        },
+        {
+            "pattern": "no language integration",
+            "context": {"test_type": "integration"},
+        },
+    ]
+    builder._memory.get_failed_patterns.return_value = [
+        {
+            "pattern": "avoid global state",
+            "reason": "causes flaky",
+            "context": {"framework": "pytest", "test_type": "integration"},
+        },
+        {
+            "pattern": "irrelevant failure",
+            "reason": "n/a",
+            "context": {"framework": "jest", "test_type": "unit"},
+        },
+    ]
+
+    result = builder._get_memory_context("pytest")
+
+    assert result is not None
+    assert len(result["known_patterns"]) == 2
+    assert "use fixtures" in result["known_patterns"][0]
+    assert "no language integration" in result["known_patterns"][1]
+    assert len(result["failed_patterns"]) == 1
+
+
+def test_classify_test_failure_connection_refused(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """_classify_test_failure detects connection refused as MISSING_DEP."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    result = RunResult(
+        failed=1,
+        test_cases=[
+            CaseResult(
+                name="test_it",
+                status=CaseStatus.FAILED,
+                failure_message="Connection refused: connect ECONNREFUSED",
+            )
+        ],
+    )
+    assert builder._classify_test_failure(result) == FailureType.MISSING_DEP
+
+
+def test_extract_error_message_empty_errors_no_raw(
+    mock_llm_engine: MagicMock,
+    pytest_project: Path,
+) -> None:
+    """_extract_error_message returns empty when no errors and no raw output."""
+    builder = IntegrationBuilder(
+        llm_engine=mock_llm_engine,
+        project_root=pytest_project,
+        enable_memory=False,
+    )
+    result = RunResult(failed=0, test_cases=[], raw_output="")
+    msg = builder._extract_error_message(result)
+    assert msg == ""

@@ -64,7 +64,7 @@ def _extract_flask_routes_from_file(file_path: Path, root: Path) -> list[RouteIn
                 if route_info:
                     routes.append(route_info)
 
-    except SyntaxError, UnicodeDecodeError:
+    except (SyntaxError, UnicodeDecodeError):
         # Skip files that can't be parsed
         pass
 
@@ -87,7 +87,7 @@ def _parse_flask_decorator(
     decorator: ast.expr,
     func_node: ast.FunctionDef,
     file_path: Path,
-    root: Path,  # noqa: ARG001
+    _root: Path,
 ) -> RouteInfo | None:
     """Parse a Flask route decorator."""
     # Handle @app.route() or @blueprint.route()

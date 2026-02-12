@@ -111,9 +111,13 @@ def project_root(tmp_path: Path) -> Path:
     test_dir = tmp_path / "tests"
     test_dir.mkdir()
 
-    # Create a stale test
+    # Create a project package whose internals were deleted (stale scenario)
+    (tmp_path / "old_module").mkdir()
+    (tmp_path / "old_module" / "__init__.py").write_text("")
+
+    # Create a stale test that imports a deleted submodule
     (test_dir / "test_old_module.py").write_text("""
-from old_module import deleted_function
+from old_module.deleted_submodule import deleted_function
 
 def test_deleted() -> None:
     assert deleted_function() == 42

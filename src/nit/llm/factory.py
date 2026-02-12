@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
-from nit.llm.builtin import BuiltinLLM, RateLimitConfig, RetryConfig
+from nit.llm.builtin import BuiltinLLM, BuiltinLLMConfig, RateLimitConfig, RetryConfig
 from nit.llm.cli_adapter import (
     ClaudeCodeAdapter,
     CLIToolConfig,
@@ -96,12 +96,14 @@ def _create_builtin(config: LLMConfig) -> BuiltinLLM:
         raise LLMError("No LLM model configured. Set 'llm.model' in .nit.yml or NIT_LLM_MODEL.")
 
     return BuiltinLLM(
-        model=model,
-        provider=config.provider or None,
-        api_key=config.api_key or None,
-        base_url=config.base_url or None,
-        retry=RetryConfig(max_retries=config.max_retries),
-        rate_limit=RateLimitConfig(requests_per_minute=config.requests_per_minute),
+        BuiltinLLMConfig(
+            model=model,
+            provider=config.provider or None,
+            api_key=config.api_key or None,
+            base_url=config.base_url or None,
+            retry=RetryConfig(max_retries=config.max_retries),
+            rate_limit=RateLimitConfig(requests_per_minute=config.requests_per_minute),
+        )
     )
 
 

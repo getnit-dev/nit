@@ -1,11 +1,9 @@
 """Tests for MemoryStore base class."""
 
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 import pytest
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 from nit.memory.store import MemoryStore
 

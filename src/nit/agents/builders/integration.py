@@ -14,6 +14,7 @@ This agent (task 2.11.1):
 from __future__ import annotations
 
 import logging
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -443,16 +444,19 @@ class IntegrationBuilder(BaseAgent):
         self,
         test_code: str,
         adapter: TestFrameworkAdapter,
-        _task: IntegrationBuildTask,
-        _request: GenerationRequest,
+        task: IntegrationBuildTask,
+        request: GenerationRequest,
     ) -> tuple[list[ValidationAttempt], str, ValidationAttempt | None]:
         """Run the validation pipeline with retry logic.
+
+        Validates syntax, executes the test via the adapter, and retries
+        with LLM error feedback on failure.
 
         Args:
             test_code: Initial generated test code.
             adapter: Test framework adapter.
-            _task: Integration build task (unused in stub implementation).
-            _request: Original generation request for retries (unused in stub implementation).
+            task: Integration build task.
+            request: Original generation request for retries.
 
         Returns:
             Tuple of (validation_attempts, final_test_code, final_attempt).
@@ -462,52 +466,253 @@ class IntegrationBuilder(BaseAgent):
 
         validation_attempts: list[ValidationAttempt] = []
         current_code = test_code
+        test_file = self._determine_test_file_path(task, adapter)
 
-        for attempt in range(1, self._max_retries + 1):
-            logger.debug("Validation attempt %d/%d", attempt, self._max_retries)
+        try:
+            for attempt_num in range(1, self._max_retries + 1):
+                logger.debug("Validation attempt %d/%d", attempt_num, self._max_retries)
 
-            # Validate syntax
-            validation_result = adapter.validate_test(current_code)
-            syntax_valid = validation_result.valid
-            syntax_errors = validation_result.errors
+                # Validate syntax
+                validation_result = adapter.validate_test(current_code)
+                syntax_valid = validation_result.valid
+                syntax_errors = validation_result.errors
 
-            # Run the test if syntax is valid
-            test_result: RunResult | None = None
-            failure_type: FailureType | None = None
-            error_message = ""
+                test_result: RunResult | None = None
+                failure_type: FailureType | None = None
+                error_message = ""
 
-            if syntax_valid:
-                # TODO: Implement test running for integration tests
-                # For now, just mark as valid if syntax passes
-                pass
+                if syntax_valid:
+                    test_result, failure_type, error_message = await self._execute_test(
+                        current_code, adapter, test_file
+                    )
+                else:
+                    failure_type = FailureType.TEST_BUG
+                    error_message = "Syntax validation errors:\n" + "\n".join(syntax_errors)
 
-            # Record this attempt
-            val_attempt = ValidationAttempt(
-                attempt=attempt,
-                test_code=current_code,
-                syntax_valid=syntax_valid,
-                syntax_errors=syntax_errors,
-                test_result=test_result,
-                failure_type=failure_type,
-                error_message=error_message,
-            )
-            validation_attempts.append(val_attempt)
-
-            # If syntax is valid, we're done (for now - full test running TBD)
-            if syntax_valid:
-                logger.info("Integration test validation passed on attempt %d", attempt)
-                return validation_attempts, current_code, val_attempt
-
-            # If not valid, prepare retry
-            if attempt < self._max_retries:
-                logger.info(
-                    "Validation failed on attempt %d, retrying with error feedback", attempt
+                val_attempt = ValidationAttempt(
+                    attempt=attempt_num,
+                    test_code=current_code,
+                    syntax_valid=syntax_valid,
+                    syntax_errors=syntax_errors,
+                    test_result=test_result,
+                    failure_type=failure_type,
+                    error_message=error_message,
                 )
-                # TODO: Implement retry with error feedback
-                break
+                validation_attempts.append(val_attempt)
 
-        # Max retries reached
+                # Success: syntax valid and tests passed (or no test result)
+                if syntax_valid and (test_result is None or test_result.success):
+                    logger.info("Integration test validation passed on attempt %d", attempt_num)
+                    return validation_attempts, current_code, val_attempt
+
+                # Retry with error feedback
+                if attempt_num < self._max_retries:
+                    logger.info(
+                        "Validation failed on attempt %d, retrying with error feedback",
+                        attempt_num,
+                    )
+                    try:
+                        current_code = await self._retry_with_feedback(request, val_attempt)
+                    except Exception as exc:
+                        logger.error("Error during retry: %s", exc)
+                        break
+
+        finally:
+            try:
+                if test_file.exists():
+                    test_file.unlink()
+            except Exception as exc:
+                logger.warning("Could not remove temporary test file: %s", exc)
+
         return validation_attempts, current_code, validation_attempts[-1]
+
+    async def _execute_test(
+        self,
+        test_code: str,
+        adapter: TestFrameworkAdapter,
+        test_file: Path,
+    ) -> tuple[RunResult | None, FailureType | None, str]:
+        """Write integration test to a temporary file and execute via adapter.
+
+        Args:
+            test_code: Generated test code.
+            adapter: Test framework adapter.
+            test_file: Path to write the test file.
+
+        Returns:
+            Tuple of (test_result, failure_type, error_message).
+        """
+        try:
+            test_file.parent.mkdir(parents=True, exist_ok=True)
+            test_file.write_text(test_code, encoding="utf-8")
+            logger.debug("Wrote integration test to %s", test_file)
+
+            test_result = await adapter.run_tests(
+                self._root,
+                test_files=[test_file],
+                timeout=120.0,
+            )
+
+            if test_result.success:
+                return test_result, None, ""
+
+            failure_type = self._classify_test_failure(test_result)
+            error_msg = self._extract_error_message(test_result)
+            return test_result, failure_type, error_msg
+
+        except Exception as exc:
+            logger.exception("Error during integration test execution")
+            return None, FailureType.UNKNOWN, f"Execution error: {exc}"
+
+    def _classify_test_failure(self, test_result: RunResult) -> FailureType:
+        """Classify integration test failure type from test result.
+
+        Args:
+            test_result: Result from test execution.
+
+        Returns:
+            FailureType classification.
+        """
+        for test_case in test_result.test_cases:
+            if not test_case.failure_message:
+                continue
+            msg_lower = test_case.failure_message.lower()
+
+            if any(
+                p in msg_lower
+                for p in [
+                    "modulenotfounderror",
+                    "cannot find module",
+                    "import error",
+                    "no module named",
+                    "module not found",
+                    "cannot resolve",
+                    "connection refused",
+                    "connect econnrefused",
+                    "enotfound",
+                    "socket hang up",
+                ]
+            ):
+                return FailureType.MISSING_DEP
+
+            if any(
+                p in msg_lower
+                for p in [
+                    "assertionerror",
+                    "expected",
+                    "but got",
+                    "mock",
+                    "spy",
+                    "stub",
+                    "typeerror",
+                ]
+            ):
+                return FailureType.TEST_BUG
+
+        return FailureType.TEST_BUG
+
+    def _extract_error_message(self, test_result: RunResult) -> str:
+        """Extract error message from test result for LLM feedback.
+
+        Args:
+            test_result: Result from test execution.
+
+        Returns:
+            Formatted error message for LLM.
+        """
+        errors = [
+            f"Test '{tc.name}' failed:\n{tc.failure_message}"
+            for tc in test_result.test_cases
+            if tc.failure_message
+        ]
+
+        if not errors and test_result.raw_output:
+            return f"Test execution failed:\n{test_result.raw_output[-500:]}"
+
+        return "\n\n".join(errors[:3])
+
+    async def _retry_with_feedback(
+        self,
+        original_request: GenerationRequest,
+        previous_attempt: ValidationAttempt,
+    ) -> str:
+        """Retry test generation with feedback from previous failure.
+
+        Args:
+            original_request: Original generation request.
+            previous_attempt: Previous validation attempt with error info.
+
+        Returns:
+            New test code generated with feedback.
+        """
+        failure_type_str = (
+            previous_attempt.failure_type.value if previous_attempt.failure_type else "unknown"
+        )
+        feedback_parts = [
+            "The previous integration test generation failed. Fix the following issues:",
+            "",
+            f"**Failure Type:** {failure_type_str}",
+            "",
+            "**Error Details:**",
+            previous_attempt.error_message,
+            "",
+            "**Previous Test Code:**",
+            "```",
+            previous_attempt.test_code[:1000],
+            "```",
+            "",
+            "Please generate a corrected version of the integration test.",
+        ]
+
+        retry_messages = list(original_request.messages)
+        retry_messages.append(LLMMessage(role="user", content="\n".join(feedback_parts)))
+
+        logger.debug("Retrying with feedback: %d messages", len(retry_messages))
+
+        response = await self._llm.generate(GenerationRequest(messages=retry_messages))
+        return response.text.strip()
+
+    def _determine_test_file_path(
+        self, task: IntegrationBuildTask, adapter: TestFrameworkAdapter
+    ) -> Path:
+        """Determine where to write the integration test file for validation.
+
+        Args:
+            task: Integration build task with source file info.
+            adapter: Test framework adapter for naming conventions.
+
+        Returns:
+            Path where test file should be written.
+        """
+        if task.output_file:
+            return self._resolve_path(task.output_file)
+
+        source_path = self._resolve_path(task.source_file)
+        source_name = source_path.stem
+
+        patterns = adapter.get_test_pattern()
+        ext = ".test.ts"
+        if patterns:
+            pattern = patterns[0]
+            if pattern.endswith(".py"):
+                ext = ".py"
+            elif pattern.endswith(".test.ts"):
+                ext = ".test.ts"
+            elif pattern.endswith(".spec.ts"):
+                ext = ".spec.ts"
+            elif pattern.endswith(".test.js"):
+                ext = ".test.js"
+
+        temp_dir = Path(tempfile.gettempdir()) / "nit_integration_tests"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+        test_name = (
+            f"test_{source_name}_integration{ext}"
+            if ext.endswith(".py")
+            else f"{source_name}.integration{ext}"
+        )
+
+        return temp_dir / test_name
 
     def _update_memory_from_validation(
         self,

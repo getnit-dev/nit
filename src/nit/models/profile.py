@@ -33,6 +33,12 @@ class ProjectProfile:
     workspace_tool: str = "generic"
     """Name of the workspace tool (e.g. ``"turborepo"``, ``"pnpm"``, ``"generic"``)."""
 
+    llm_usage_count: int = 0
+    """Number of LLM/AI integration usages detected in the project."""
+
+    llm_providers: list[str] = field(default_factory=list)
+    """LLM providers detected (e.g. ``["openai", "anthropic"]``)."""
+
     # ── Convenience accessors ──────────────────────────────────────
 
     @property
@@ -63,6 +69,8 @@ class ProjectProfile:
             "primary_language": self.primary_language,
             "workspace_tool": self.workspace_tool,
             "is_monorepo": self.is_monorepo,
+            "llm_usage_count": self.llm_usage_count,
+            "llm_providers": self.llm_providers,
             "languages": [
                 {
                     "language": li.language,
@@ -135,10 +143,20 @@ class ProjectProfile:
                 if isinstance(pkg, dict)
             ]
 
+        llm_providers_raw = data.get("llm_providers", [])
+        llm_providers = (
+            [str(p) for p in llm_providers_raw] if isinstance(llm_providers_raw, list) else []
+        )
+
+        llm_count_raw = data.get("llm_usage_count", 0)
+        llm_usage_count = int(llm_count_raw) if isinstance(llm_count_raw, (int, float)) else 0
+
         return cls(
             root=str(data.get("root", "")),
             languages=languages,
             frameworks=frameworks,
             packages=packages,
             workspace_tool=str(data.get("workspace_tool", "generic")),
+            llm_usage_count=llm_usage_count,
+            llm_providers=llm_providers,
         )

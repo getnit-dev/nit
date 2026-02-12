@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from nit.memory.package_memory import PackageMemory
+
 if TYPE_CHECKING:
     from pathlib import Path
-
-    from nit.memory.package_memory import PackageMemory
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +39,8 @@ class PackageMemoryManager:
             PackageMemory instance for the package.
         """
         if package_name not in self._package_memories:
-            # Lazy import to avoid circular dependency at module level
-            import nit.memory.package_memory  # noqa: PLC0415
-
             # Create memory - PackageMemory expects project root, not memory dir
-            memory = nit.memory.package_memory.PackageMemory(self.project_root, package_name)
+            memory = PackageMemory(self.project_root, package_name)
             self._package_memories[package_name] = memory
 
         return self._package_memories[package_name]

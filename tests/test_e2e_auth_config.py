@@ -72,8 +72,8 @@ e2e:
 
         assert config.e2e.auth.strategy == "token"
         assert config.e2e.auth.token == ""  # Env var not set
-        assert config.e2e.auth.token_header == "X-API-Key"
-        assert config.e2e.auth.token_prefix == ""
+        assert config.e2e.auth.auth_header_name == "X-API-Key"
+        assert config.e2e.auth.auth_prefix == ""
 
     def test_cookie_auth_config(self, tmp_path: Path) -> None:
         """Test parsing cookie-based auth configuration."""
@@ -364,8 +364,8 @@ class TestTokenAuthStrategy:
         config = AuthConfig(
             strategy="token",
             token="abc123",
-            token_header="Authorization",
-            token_prefix="Bearer",
+            auth_header_name="Authorization",
+            auth_prefix="Bearer",
         )
         context = AuthContext(
             config=config,
@@ -384,8 +384,8 @@ class TestTokenAuthStrategy:
         config = AuthConfig(
             strategy="token",
             token="xyz789",
-            token_header="X-API-Key",
-            token_prefix="",
+            auth_header_name="X-API-Key",
+            auth_prefix="",
         )
         context = AuthContext(
             config=config,
@@ -443,7 +443,7 @@ class TestOAuthAuthStrategy:
         config = AuthConfig(
             strategy="oauth",
             token="oauth_token_123",
-            token_prefix="Bearer",
+            auth_prefix="Bearer",
         )
         context = AuthContext(
             config=config,

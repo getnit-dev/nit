@@ -558,21 +558,13 @@ class RiskAnalyzer(BaseAgent):
         Returns:
             CompletedProcess with command results.
         """
-        full_args = [self._git_path, *args]
-        # S603: This subprocess call is safe because:
-        # 1. Uses full executable path from shutil.which (no PATH injection)
-        # 2. Uses list-based arguments (no shell parsing or injection)
-        # 3. Explicitly sets shell=False (no shell interpretation)
-        # 4. All file paths are validated via _validate_file_path()
-        # 5. All other arguments are hardcoded git commands
-        return subprocess.run(  # noqa: S603
-            full_args,
+        return subprocess.run(
+            [self._git_path, *args],
             cwd=self._root,
             capture_output=True,
             text=True,
             timeout=5,
             check=False,
-            shell=False,  # Explicit: never use shell interpretation
         )
 
     def _validate_file_path(self, file_path: str) -> bool:

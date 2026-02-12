@@ -397,7 +397,7 @@ llm:
   # platform. LLM requests route through Hono Worker → AI Gateway,
   # which handles provider keys, caching, routing. D1 tracks usage/budgets.
   # mode: builtin
-  # base_url: https://api.getnit.dev/v1/llm-proxy  # platform AI Gateway endpoint
+  # base_url: https://platform.getnit.dev/v1/llm-proxy  # platform AI Gateway endpoint
   # api_key: ${NIT_PLATFORM_API_KEY}                # virtual key issued by platform
   # model: claude-sonnet                             # model alias
 
@@ -763,7 +763,7 @@ The name needs to be short, memorable, slightly aggressive/protective, dev-frien
 ### Recommendation: **nit**
 
 - 4 letters, easy to type everywhere
-- `nit init`, `nit scan`, `nit hunt` — clean CLI ergonomics
+- `nit init`, `nit scan`, `nit pick` — clean CLI ergonomics
 - `.nit/` directory, `.nit.yml` config — looks professional
 - Culturally meaningful to you (Slavic origin)
 - Phonetically close to "cover" (coverage) — subconscious association
@@ -873,7 +873,7 @@ global:
     model: claude-sonnet-4-20250514
     api_key: ${ANTHROPIC_API_KEY}
     # Or use platform key (replaces provider/api_key above):
-    # base_url: https://api.getnit.dev/v1/llm-proxy
+    # base_url: https://platform.getnit.dev/v1/llm-proxy
     # api_key: ${NIT_PLATFORM_API_KEY}
   memory:
     enabled: true
@@ -1876,7 +1876,7 @@ Estimated improvement: 15-25% consistency, 45% token savings
 
 ```
 1. HERO
-   ├── Animated terminal showing: nit init → nit hunt
+   ├── Animated terminal showing: nit init → nit pick
    ├── Tagline: "Forge quality into every commit"
    ├── Subline: "Open-source AI testing swarm. Unit · Integration · E2E · Drift · Docs"
    ├── CTA: "Get Started" | "Star on GitHub"
@@ -1912,7 +1912,7 @@ Estimated improvement: 15-25% consistency, 45% token savings
    └── Feature-by-feature with checkmarks
 
 8. QUICKSTART
-   ├── Code block: pip install nit && nit init && nit hunt
+   ├── Code block: pip install nit && nit init && nit pick
    ├── GitHub Action YAML snippet
    └── 30-second GIF showing first run
 
@@ -1945,7 +1945,7 @@ Estimated improvement: 15-25% consistency, 45% token savings
 ```
 nit CLI → LiteLLM SDK (base_url = platform proxy endpoint)
                 │
-                └── POST https://api.getnit.dev/v1/llm-proxy
+                └── POST https://platform.getnit.dev/v1/llm-proxy
                           │
                           ├── Hono Worker middleware:
                           │     1. Validate virtual key (D1 virtual_keys table)
@@ -2250,9 +2250,9 @@ nit run --only-generated              # Run only nit-generated tests
 nit run --package services/ml         # Run tests for specific package
 
 # Bug Hunting
-nit hunt                              # Full pipeline: scan → analyze → generate → run → report
-nit hunt --fix                        # Also generate fixes for found bugs
-nit hunt --pr                         # Create PRs with tests and fixes
+nit pick                              # Full pipeline: scan → analyze → generate → run → report
+nit pick --fix                        # Also generate fixes for found bugs
+nit pick --pr                         # Create PRs with tests and fixes
 
 # LLM Drift
 nit drift                             # Run drift tests
@@ -2301,7 +2301,7 @@ nit config set llm.model gpt-4o       # Update config value
 
 ## 17. What Makes This Go Viral
 
-1. **The `nit hunt` moment** — single command runs the full swarm, finds bugs, creates PRs. The output is dramatic and shareable.
+1. **The `nit pick` moment** — single command runs the full swarm, finds bugs, creates PRs. The output is dramatic and shareable.
 
 2. **"nit found 3 bugs in 2 minutes"** — these stories get tweeted, posted on HN, shared in Discord servers.
 
@@ -2458,7 +2458,7 @@ Everything runs on Cloudflare's edge platform. Zero external dependencies for ho
                     ┌──────────────────────────────────────┐
                     │         User's Machine / CI           │
                     │                                       │
-                    │   $ nit hunt --report                 │
+                    │   $ nit pick --report                 │
                     │                                       │
                     │   1. Swarm runs locally (or in CI)    │
                     │   2. Generates tests, finds bugs      │
@@ -2535,7 +2535,7 @@ CREATE TABLE coverage_reports (
     project_id TEXT NOT NULL REFERENCES projects(id),
     package_id TEXT REFERENCES packages(id),  -- NULL = whole project
     run_id TEXT NOT NULL,                     -- Unique run identifier
-    run_mode TEXT NOT NULL,                   -- pr | full | hunt | drift | docs
+    run_mode TEXT NOT NULL,                   -- pr | full | pick | drift | docs
     branch TEXT,
     commit_sha TEXT,
     
@@ -2717,14 +2717,14 @@ $ nit config set dashboard.url https://nit.dev
 $ nit config set dashboard.api_key nit_key_abc123...
 
 # Now runs upload results automatically:
-$ nit hunt --report
+$ nit pick --report
 # ... runs swarm locally ...
 # ✅ Results uploaded to https://nit.dev/dashboard/my-project
 
 # Or in CI:
 - uses: nit-ai/nit@v1
   with:
-    mode: hunt
+    mode: pick
     dashboard_url: https://nit.dev
     dashboard_api_key: ${{ secrets.NIT_API_KEY }}
 ```
@@ -2807,7 +2807,7 @@ CLI finishes run
 
 **Theme:** Dark mode, terminal-aesthetic with accent color (electric blue or acid green). Think: Warp terminal meets Linear's marketing site.
 
-**Hero concept:** Split screen — left side shows a terminal with `nit hunt` running (animated typewriter effect showing agents detecting, analyzing, building, finding bugs), right side shows the output: a GitHub PR with generated tests and a bug fix.
+**Hero concept:** Split screen — left side shows a terminal with `nit pick` running (animated typewriter effect showing agents detecting, analyzing, building, finding bugs), right side shows the output: a GitHub PR with generated tests and a bug fix.
 
 ### Page Structure (Single SPA, route-based)
 
@@ -3364,7 +3364,7 @@ irm getnit.dev/install.ps1 | iex
 
 ```bash
 # Run directly
-$ docker run --rm -v $(pwd):/workspace ghcr.io/getnit/nit:latest hunt
+$ docker run --rm -v $(pwd):/workspace ghcr.io/getnit/nit:latest pick
 
 # Or use as base image in CI
 FROM ghcr.io/getnit/nit:latest
@@ -3394,7 +3394,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: getnit/nit@v1
         with:
-          mode: hunt        # hunt | scan | generate | drift | docs
+          mode: pick        # pick | scan | generate | drift | docs
           llm_provider: anthropic
           llm_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           dashboard_url: https://getnit.dev    # optional
@@ -3411,9 +3411,9 @@ branding:
 
 inputs:
   mode:
-    description: 'Run mode: hunt | scan | generate | drift | docs'
+    description: 'Run mode: pick | scan | generate | drift | docs'
     required: false
-    default: 'hunt'
+    default: 'pick'
   llm_provider:
     description: 'LLM provider: anthropic | openai | ollama'
     required: false
@@ -3472,7 +3472,7 @@ curl -fsSL getnit.dev/install | sh  # Universal
 # Run
 cd your-project
 nit init                  # Detect stack, create .nit.yml
-nit hunt                  # Full swarm: detect → analyze → build → report
+nit pick                  # Full swarm: detect → analyze → build → report
 ```
 
 ---

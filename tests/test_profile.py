@@ -89,6 +89,8 @@ class TestSerialization:
             "primary_language",
             "workspace_tool",
             "is_monorepo",
+            "llm_usage_count",
+            "llm_providers",
             "languages",
             "frameworks",
             "packages",

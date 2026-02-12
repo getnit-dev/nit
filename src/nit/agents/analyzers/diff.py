@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from enum import Enum
@@ -190,6 +191,28 @@ class DiffAnalyzer(BaseAgent):
             project_root: Root directory of the project.
         """
         self._root = project_root
+        self._git_path = shutil.which("git") or "git"
+
+    def _run_git(self, args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        """Run a git command safely.
+
+        Uses the full git path resolved via shutil.which to avoid partial-path
+        security concerns, and list-based arguments to prevent shell injection.
+
+        Args:
+            args: Git subcommand and arguments (without the git executable).
+            cwd: Working directory for the command.
+
+        Returns:
+            CompletedProcess with command results.
+        """
+        return subprocess.run(
+            [self._git_path, *args],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
 
     @property
     def name(self) -> str:
@@ -308,22 +331,14 @@ class DiffAnalyzer(BaseAgent):
         """
         changed_files: list[FileChange] = []
 
-        # Build git diff command
+        # Build git diff command args
         if compare_ref:
-            # Compare two refs
-            cmd = ["git", "diff", "--numstat", "--name-status", f"{base_ref}...{compare_ref}"]
+            diff_args = ["diff", "--numstat", "--name-status", f"{base_ref}...{compare_ref}"]
         else:
-            # Compare against working directory
-            cmd = ["git", "diff", "--numstat", "--name-status", base_ref]
+            diff_args = ["diff", "--numstat", "--name-status", base_ref]
 
         # Run git diff
-        result = subprocess.run(  # noqa: S603
-            cmd,
-            cwd=project_root,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        result = self._run_git(diff_args, cwd=project_root)
 
         # Parse output
         for line in result.stdout.strip().split("\n"):
@@ -426,14 +441,7 @@ class DiffAnalyzer(BaseAgent):
         Returns:
             List of FileChange entries for untracked files.
         """
-        # Git commands are safe - we validate git repo exists and use hardcoded commands
-        result = subprocess.run(
-            ["git", "ls-files", "--others", "--exclude-standard"],  # noqa: S607
-            cwd=project_root,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        result = self._run_git(["ls-files", "--others", "--exclude-standard"], cwd=project_root)
 
         return [
             FileChange(path=line, change_type=ChangeType.ADDED)

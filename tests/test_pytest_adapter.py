@@ -7,12 +7,10 @@ tree-sitter validation with sample Python fixtures.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 from nit.adapters.base import (
     CaseStatus,
@@ -30,6 +28,8 @@ from nit.adapters.unit.pytest_adapter import (
     _has_setup_cfg_pytest,
     _map_outcome,
     _parse_pytest_json,
+    _safe_read_text,
+    _to_float,
     _validate_python,
 )
 from nit.llm.prompts.pytest_prompt import PytestTemplate
@@ -615,3 +615,288 @@ class TestValidationResult:
         result = ValidationResult(valid=False, errors=["Syntax error at line 5-5"])
         assert result.valid is False
         assert len(result.errors) == 1
+
+
+# ── Additional coverage: missing lines ────────────────────────────
+
+
+class TestPytestSafeReadText:
+    """Cover _safe_read_text branches."""
+
+    def test_reads_existing_file(self, tmp_path: Path) -> None:
+        f = tmp_path / "file.txt"
+        f.write_text("hello", encoding="utf-8")
+        result = _safe_read_text(f)
+        assert result == "hello"
+
+    def test_returns_none_for_missing(self, tmp_path: Path) -> None:
+        result = _safe_read_text(tmp_path / "nonexistent.txt")
+        assert result is None
+
+
+class TestPytestToFloat:
+    """Cover _to_float branches."""
+
+    def test_float_value(self) -> None:
+        assert _to_float(1.5) == 1.5
+
+    def test_int_value(self) -> None:
+        assert _to_float(42) == 42.0
+
+    def test_string_value(self) -> None:
+        assert _to_float("3.14") == pytest.approx(3.14)
+
+    def test_invalid_returns_zero(self) -> None:
+        assert _to_float("not a number") == 0.0
+        assert _to_float(None) == 0.0
+
+
+class TestPytestRequiredPackagesCommands:
+    """Cover get_required_packages / get_required_commands."""
+
+    def test_required_packages(self) -> None:
+        pkgs = PytestAdapter().get_required_packages()
+        assert "pytest" in pkgs
+        assert "pytest-json-report" in pkgs
+
+    def test_required_commands(self) -> None:
+        cmds = PytestAdapter().get_required_commands()
+        assert "python" in cmds
+
+
+class TestPytestJsonParsingEdgeCases:
+    """Cover edge cases in _parse_pytest_json."""
+
+    def test_non_list_tests_key(self) -> None:
+        data = json.dumps({"tests": "not a list", "duration": 0.5})
+        result = _parse_pytest_json(data, data)
+        assert result.total == 0
+
+    def test_non_dict_test_entry(self) -> None:
+        data = json.dumps({"tests": ["not a dict"], "duration": 0.5})
+        result = _parse_pytest_json(data, data)
+        assert result.total == 1
+        assert result.errors == 1
+
+    def test_duration_from_call_phase(self) -> None:
+        """Cover duration from call phase when top-level is 0."""
+        data = json.dumps(
+            {
+                "duration": 0.5,
+                "tests": [
+                    {
+                        "nodeid": "test.py::test_x",
+                        "outcome": "passed",
+                        "duration": 0,
+                        "call": {"duration": 0.01, "outcome": "passed"},
+                    }
+                ],
+            }
+        )
+        result = _parse_pytest_json(data, data)
+        assert result.test_cases[0].duration_ms == pytest.approx(10.0)
+
+    def test_crash_message_when_no_longrepr(self) -> None:
+        """Cover crash message extraction when longrepr is empty."""
+        data = json.dumps(
+            {
+                "duration": 0.1,
+                "tests": [
+                    {
+                        "nodeid": "test.py::test_crash",
+                        "outcome": "failed",
+                        "duration": 0.01,
+                        "call": {
+                            "duration": 0.01,
+                            "outcome": "failed",
+                            "crash": {"message": "segfault"},
+                        },
+                    }
+                ],
+            }
+        )
+        result = _parse_pytest_json(data, data)
+        assert "segfault" in result.test_cases[0].failure_message
+
+    def test_error_outcome(self) -> None:
+        data = json.dumps(
+            {
+                "duration": 0.1,
+                "tests": [
+                    {
+                        "nodeid": "test.py::test_err",
+                        "outcome": "error",
+                        "duration": 0.01,
+                    }
+                ],
+            }
+        )
+        result = _parse_pytest_json(data, data)
+        assert result.errors == 1
+
+    def test_nodeid_without_separator(self) -> None:
+        """Cover nodeid without :: => empty file_path."""
+        data = json.dumps(
+            {
+                "duration": 0.1,
+                "tests": [
+                    {
+                        "nodeid": "just_a_name",
+                        "outcome": "passed",
+                        "duration": 0.01,
+                    }
+                ],
+            }
+        )
+        result = _parse_pytest_json(data, data)
+        assert result.test_cases[0].file_path == ""
+
+
+class TestPytestDetectionEdgeCases:
+    """Cover more detection branches."""
+
+    def test_has_pytest_dependency_tool_pytest_line(self, tmp_path: Path) -> None:
+        """Lines with [tool.pytest should be skipped."""
+        _write_file(
+            tmp_path,
+            "pyproject.toml",
+            "[tool.pytest.ini_options]\naddopts = '-v'\n",
+        )
+        # _has_pytest_dependency should NOT match tool.pytest lines
+        # but _has_pyproject_pytest_config should
+        assert _has_pyproject_pytest_config(tmp_path) is True
+
+    def test_has_pytest_dependency_section_header_skipped(self, tmp_path: Path) -> None:
+        """Lines starting with [ should be skipped."""
+        _write_file(
+            tmp_path,
+            "pyproject.toml",
+            '[project]\nname = "my-tool"\n',
+        )
+        assert _has_pytest_dependency(tmp_path) is False
+
+    def test_has_setup_cfg_no_section(self, tmp_path: Path) -> None:
+        _write_file(tmp_path, "setup.cfg", "[metadata]\nname = foo\n")
+        assert _has_setup_cfg_pytest(tmp_path) is False
+
+
+class TestPytestRunTestsMocked:
+    """Cover run_tests method branches with mocked subprocess."""
+
+    @pytest.mark.asyncio
+    async def test_run_tests_timeout(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _write_file(tmp_path, "conftest.py", "")
+
+        async def _fake_exec(*args: object, **kwargs: object) -> object:
+            raise TimeoutError
+
+        monkeypatch.setattr(
+            "nit.adapters.unit.pytest_adapter.asyncio.create_subprocess_exec",
+            _fake_exec,
+        )
+        result = await PytestAdapter().run_tests(tmp_path, collect_coverage=False)
+        assert result.success is False
+        assert "timed out" in result.raw_output
+
+    @pytest.mark.asyncio
+    async def test_run_tests_file_not_found(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _write_file(tmp_path, "conftest.py", "")
+
+        async def _fake_exec(*args: object, **kwargs: object) -> object:
+            raise FileNotFoundError
+
+        monkeypatch.setattr(
+            "nit.adapters.unit.pytest_adapter.asyncio.create_subprocess_exec",
+            _fake_exec,
+        )
+        result = await PytestAdapter().run_tests(tmp_path, collect_coverage=False)
+        assert result.success is False
+        assert "not found" in result.raw_output
+
+    @pytest.mark.asyncio
+    async def test_run_tests_with_json_report(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _write_file(tmp_path, "conftest.py", "")
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate = AsyncMock(return_value=(b"stdout", b""))
+
+        json_report = json.dumps(
+            {
+                "duration": 0.5,
+                "tests": [
+                    {
+                        "nodeid": "test.py::test_ok",
+                        "outcome": "passed",
+                        "duration": 0.01,
+                    }
+                ],
+            }
+        )
+
+        created_files: list[str] = []
+
+        original_mkstemp = __import__("tempfile").mkstemp
+
+        def fake_mkstemp(suffix: str = "", prefix: str = "") -> tuple[int, str]:
+            fd, path = original_mkstemp(suffix=suffix, prefix=prefix, dir=str(tmp_path))
+            created_files.append(path)
+            Path(path).write_text(json_report, encoding="utf-8")
+            return fd, path
+
+        monkeypatch.setattr("tempfile.mkstemp", fake_mkstemp)
+        monkeypatch.setattr(
+            "nit.adapters.unit.pytest_adapter.asyncio.create_subprocess_exec",
+            AsyncMock(return_value=mock_proc),
+        )
+        result = await PytestAdapter().run_tests(
+            tmp_path,
+            collect_coverage=False,
+        )
+        assert result.passed == 1
+
+    @pytest.mark.asyncio
+    async def test_run_tests_with_test_files(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _write_file(tmp_path, "conftest.py", "")
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+        monkeypatch.setattr(
+            "nit.adapters.unit.pytest_adapter.asyncio.create_subprocess_exec",
+            AsyncMock(return_value=mock_proc),
+        )
+        test_file = tmp_path / "tests" / "test_foo.py"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.touch()
+        result = await PytestAdapter().run_tests(
+            tmp_path,
+            test_files=[test_file],
+            collect_coverage=False,
+        )
+        assert isinstance(result, RunResult)
+
+
+class TestExtractJsonObjectEdgeCases:
+    """Cover edge cases in _extract_json_object."""
+
+    def test_brace_before_closing(self) -> None:
+        """Cover end < start branch."""
+        assert _extract_json_object("}before{") is None

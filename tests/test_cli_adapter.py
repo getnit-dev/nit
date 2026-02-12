@@ -10,9 +10,14 @@ import pytest
 
 from nit.llm.cli_adapter import (
     ClaudeCodeAdapter,
+    CLIToolAdapter,
     CLIToolConfig,
     CodexAdapter,
     CustomCommandAdapter,
+    _parse_bool_pattern,
+    _parse_float_pattern,
+    _parse_int_pattern,
+    _parse_model_pattern,
 )
 from nit.llm.engine import GenerationRequest, LLMConnectionError, LLMError, LLMMessage
 
@@ -71,8 +76,9 @@ async def test_claude_code_adapter_success(mock_which: Any) -> None:
         assert response.prompt_tokens == 100
         assert response.completion_tokens == 50
         assert mock_report.call_count == 1
-        assert mock_report.call_args.kwargs["provider"] == "anthropic"
-        assert mock_report.call_args.kwargs["source"] == "cli"
+        usage_event = mock_report.call_args.args[0]
+        assert usage_event.provider == "anthropic"
+        assert usage_event.source == "cli"
 
 
 @pytest.mark.asyncio
@@ -391,3 +397,181 @@ async def test_error_detection(
 
         with pytest.raises(LLMError, match=expected_match):
             await adapter.generate(request)
+
+
+# ── Helper function tests ──
+
+
+def test_parse_int_pattern_match() -> None:
+    assert _parse_int_pattern("prompt_tokens: 100", [r"prompt_tokens:\s*(\d+)"]) == 100
+
+
+def test_parse_int_pattern_no_match() -> None:
+    assert _parse_int_pattern("no match here", [r"tokens:\s*(\d+)"]) == 0
+
+
+def test_parse_int_pattern_invalid_value() -> None:
+    # Pattern matches but group isn't valid int — tries next pattern
+    assert _parse_int_pattern("tokens: abc", [r"tokens:\s*(\w+)"]) == 0
+
+
+def test_parse_float_pattern_match() -> None:
+    assert _parse_float_pattern("cost: $1.23", [r"\$([0-9]+\.[0-9]+)"]) == 1.23
+
+
+def test_parse_float_pattern_no_match() -> None:
+    assert _parse_float_pattern("nothing", [r"\$([0-9]+\.[0-9]+)"]) == 0.0
+
+
+def test_parse_float_pattern_invalid() -> None:
+    assert _parse_float_pattern("cost: abc", [r"cost:\s*(\w+)"]) == 0.0
+
+
+def test_parse_bool_pattern_true() -> None:
+    assert _parse_bool_pattern("cache_hit: true", [r"cache_hit:\s*(\w+)"]) is True
+    assert _parse_bool_pattern("cache_hit: 1", [r"cache_hit:\s*(\w+)"]) is True
+    assert _parse_bool_pattern("cache_hit: yes", [r"cache_hit:\s*(\w+)"]) is True
+    assert _parse_bool_pattern("cache_hit: hit", [r"cache_hit:\s*(\w+)"]) is True
+
+
+def test_parse_bool_pattern_false() -> None:
+    assert _parse_bool_pattern("cache_hit: false", [r"cache_hit:\s*(\w+)"]) is False
+    assert _parse_bool_pattern("cache_hit: 0", [r"cache_hit:\s*(\w+)"]) is False
+    assert _parse_bool_pattern("cache_hit: miss", [r"cache_hit:\s*(\w+)"]) is False
+
+
+def test_parse_bool_pattern_no_match() -> None:
+    assert _parse_bool_pattern("nothing", [r"cache_hit:\s*(\w+)"]) is False
+
+
+def test_parse_bool_pattern_unknown_value() -> None:
+    assert _parse_bool_pattern("cache_hit: maybe", [r"cache_hit:\s*(\w+)"]) is False
+
+
+def test_parse_model_pattern_found() -> None:
+    assert _parse_model_pattern("model: gpt-4") == "gpt-4"
+    assert _parse_model_pattern("model_name = claude-3") == "claude-3"
+
+
+def test_parse_model_pattern_not_found() -> None:
+    assert _parse_model_pattern("no model info") is None
+
+
+# ── _infer_provider_from_model tests ──
+
+
+def test_infer_provider_from_model() -> None:
+    assert CLIToolAdapter._infer_provider_from_model("claude-3") == "anthropic"
+    assert CLIToolAdapter._infer_provider_from_model("gpt-4") == "openai"
+    assert CLIToolAdapter._infer_provider_from_model("o1-mini") == "openai"
+    assert CLIToolAdapter._infer_provider_from_model("o3-mini") == "openai"
+    assert CLIToolAdapter._infer_provider_from_model("gemini-pro") == "google"
+    assert CLIToolAdapter._infer_provider_from_model("mistral-7b") == "mistral"
+    assert CLIToolAdapter._infer_provider_from_model("custom/model") == "custom"
+    assert CLIToolAdapter._infer_provider_from_model("llama-3") == "unknown"
+
+
+# ── _estimate_tokens ──
+
+
+def test_estimate_tokens() -> None:
+    assert CLIToolAdapter._estimate_tokens("") == 1
+    assert CLIToolAdapter._estimate_tokens("a" * 100) == 25
+
+
+# ── _format_messages_as_text ──
+
+
+def test_format_messages_as_text() -> None:
+    messages = [
+        LLMMessage(role="system", content="You are helpful"),
+        LLMMessage(role="user", content="Hello"),
+        LLMMessage(role="assistant", content="Hi"),
+    ]
+    text = CLIToolAdapter._format_messages_as_text(messages)
+    assert "System: You are helpful" in text
+    assert "User: Hello" in text
+    assert "Assistant: Hi" in text
+
+
+# ── CodexAdapter extended parsing ──
+
+
+@pytest.mark.asyncio
+async def test_codex_adapter_json_usage_fields(mock_which: Any) -> None:
+    """Test codex with usage dict containing token info."""
+    data = {
+        "output_text": "result text",
+        "usage": {
+            "prompt_tokens": 50,
+            "completion_tokens": 25,
+            "total_tokens": 75,
+        },
+        "model": "codex-v2",
+        "provider": "openai",
+        "cache_hit": True,
+        "response_cost": 0.005,
+    }
+
+    async def _mock_exec(*args: Any, **kwargs: Any) -> MagicMock:
+        return await _create_mock_proc(stdout=json.dumps(data), stderr="", exit_code=0)
+
+    with patch("asyncio.create_subprocess_exec", new=_mock_exec):
+        config = CLIToolConfig(command="codex", model="codex-v2")
+        adapter = CodexAdapter(config)
+        request = GenerationRequest(messages=[LLMMessage(role="user", content="Test")])
+        response = await adapter.generate(request)
+        assert response.text == "result text"
+        assert response.prompt_tokens == 50
+        assert response.completion_tokens == 25
+
+
+@pytest.mark.asyncio
+async def test_codex_adapter_stderr_fallback(mock_which: Any) -> None:
+    """Test codex falls back to stderr for token info."""
+    data = {"text": "output"}
+
+    async def _mock_exec(*args: Any, **kwargs: Any) -> MagicMock:
+        return await _create_mock_proc(
+            stdout=json.dumps(data),
+            stderr="prompt_tokens: 30\ncompletion_tokens: 15\ncost: $0.01\n"
+            "model: gpt-4\ncache_hit: true\n",
+            exit_code=0,
+        )
+
+    with patch("asyncio.create_subprocess_exec", new=_mock_exec):
+        config = CLIToolConfig(command="codex", model="codex-v2")
+        adapter = CodexAdapter(config)
+        request = GenerationRequest(messages=[LLMMessage(role="user", content="Test")])
+        response = await adapter.generate(request)
+        assert response.text == "output"
+
+
+# ── ClaudeCodeAdapter model_name property ──
+
+
+def test_claude_code_model_name(mock_which: Any) -> None:
+    config = CLIToolConfig(command="claude", model="claude-sonnet-4-5")
+    adapter = ClaudeCodeAdapter(config)
+    assert adapter.model_name == "claude-sonnet-4-5"
+
+
+# ── CustomCommandAdapter stdout fallback ──
+
+
+def test_custom_command_parse_output_no_file(mock_which: Any) -> None:
+    """When no output file exists, _parse_output uses stdout."""
+    config = CLIToolConfig(command="my-tool {prompt}", model="m")
+    adapter = CustomCommandAdapter(config)
+    # No _output_file attribute set
+    resp = adapter._parse_output("stdout text", "", 0, "m")
+    assert resp.text == "stdout text"
+    assert resp.error is None
+
+
+def test_custom_command_parse_output_error(mock_which: Any) -> None:
+    """Non-zero exit code sets error."""
+    config = CLIToolConfig(command="my-tool {prompt}", model="m")
+    adapter = CustomCommandAdapter(config)
+    resp = adapter._parse_output("", "fail msg", 1, "m")
+    assert resp.error == "fail msg"

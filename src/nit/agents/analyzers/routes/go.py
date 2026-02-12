@@ -59,9 +59,7 @@ def _extract_go_routes_from_file(file_path: Path, root: Path, framework: str) ->
     return routes
 
 
-def _extract_gin_routes(
-    content: str, file_path: Path, root: Path  # noqa: ARG001
-) -> list[RouteInfo]:
+def _extract_gin_routes(content: str, file_path: Path, _root: Path) -> list[RouteInfo]:
     """Extract Gin routes from Go file.
 
     Gin patterns:
@@ -106,9 +104,7 @@ def _extract_gin_routes(
     return routes
 
 
-def _extract_echo_routes(
-    content: str, file_path: Path, root: Path  # noqa: ARG001
-) -> list[RouteInfo]:
+def _extract_echo_routes(content: str, file_path: Path, _root: Path) -> list[RouteInfo]:
     """Extract Echo routes from Go file.
 
     Echo patterns:
@@ -150,9 +146,7 @@ def _extract_echo_routes(
     return routes
 
 
-def _extract_chi_routes(
-    content: str, file_path: Path, root: Path  # noqa: ARG001
-) -> list[RouteInfo]:
+def _extract_chi_routes(content: str, file_path: Path, _root: Path) -> list[RouteInfo]:
     """Extract Chi routes from Go file.
 
     Chi patterns:
@@ -194,9 +188,7 @@ def _extract_chi_routes(
     return routes
 
 
-def _extract_gorilla_routes(
-    content: str, file_path: Path, root: Path  # noqa: ARG001
-) -> list[RouteInfo]:
+def _extract_gorilla_routes(content: str, file_path: Path, _root: Path) -> list[RouteInfo]:
     """Extract Gorilla Mux routes from Go file.
 
     Gorilla patterns:

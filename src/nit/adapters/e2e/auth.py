@@ -54,7 +54,7 @@ class AuthStrategy(ABC):
 class FormAuthStrategy(AuthStrategy):
     """Form-based authentication (username + password)."""
 
-    async def setup(self, context: AuthContext) -> dict[str, Any]:  # noqa: ARG002
+    async def setup(self, _context: AuthContext) -> dict[str, Any]:
         """Navigate to login page, fill form, and wait for success."""
         # Return empty dict - actual setup happens in the test via the script
         # This allows the test to have full control over the browser instance
@@ -64,27 +64,32 @@ class FormAuthStrategy(AuthStrategy):
         """Generate Playwright login setup code."""
         config = context.config
 
+        indicator = json.dumps(config.success_indicator)
         success_check = (
-            f'await page.waitForURL("{config.success_indicator}");'
+            f"await page.waitForURL({indicator});"
             if config.success_indicator.startswith(("http://", "https://", "/"))
             else (
-                f'await page.waitForSelector("{config.success_indicator}");'
+                f"await page.waitForSelector({indicator});"
                 if config.success_indicator
                 else "await page.waitForNavigation();"
             )
         )
 
         username_selector = 'input[name="username"], input[name="email"], input[type="email"]'
-        password_selector = 'input[name="password"], input[type="password"]'  # noqa: S105
+        credential_selector = 'input[name="password"], input[type="password"]'
         submit_selector = (
             'button[type="submit"], button:has-text("Log in"), button:has-text("Sign in")'
         )
 
+        login_url = json.dumps(config.login_url)
+        username = json.dumps(config.username)
+        password = json.dumps(config.password)
+
         return f"""
   // Form-based authentication
-  await page.goto("{config.login_url}");
-  await page.fill('{username_selector}', "{config.username}");
-  await page.fill('{password_selector}', "{config.password}");
+  await page.goto({login_url});
+  await page.fill('{username_selector}', {username});
+  await page.fill('{credential_selector}', {password});
   await page.click('{submit_selector}');
   {success_check}
 """
@@ -97,13 +102,11 @@ class TokenAuthStrategy(AuthStrategy):
         """Inject token into browser context via extraHTTPHeaders."""
         config = context.config
 
-        token_value = (
-            f"{config.token_prefix} {config.token}" if config.token_prefix else config.token
-        )
+        token_value = f"{config.auth_prefix} {config.token}" if config.auth_prefix else config.token
 
         return {
             "extra_http_headers": {
-                config.token_header: token_value,
+                config.auth_header_name: token_value,
             }
         }
 
@@ -111,14 +114,17 @@ class TokenAuthStrategy(AuthStrategy):
         """Generate Playwright token injection code."""
         config = context.config
 
+        base_url = json.dumps(context.base_url)
+        token = json.dumps(config.token)
+
         return f"""
   // Token-based authentication (injected via extraHTTPHeaders in context setup)
   // Alternatively, inject into localStorage if your app expects it there:
-  await page.goto("{context.base_url}");
-  await page.evaluate(() => {{
-    localStorage.setItem('token', '{config.token}');
-    localStorage.setItem('authToken', '{config.token}');
-  }});
+  await page.goto({base_url});
+  await page.evaluate((t) => {{
+    localStorage.setItem('token', t);
+    localStorage.setItem('authToken', t);
+  }}, {token});
   await page.reload();
 """
 
@@ -145,17 +151,21 @@ class CookieAuthStrategy(AuthStrategy):
         """Generate Playwright cookie injection code."""
         config = context.config
 
+        cookie_name = json.dumps(config.cookie_name)
+        cookie_value = json.dumps(config.cookie_value)
+        base_url = json.dumps(context.base_url)
+
         return f"""
   // Cookie-based authentication (injected via cookies in context setup)
   await context.addCookies([
     {{
-      name: '{config.cookie_name}',
-      value: '{config.cookie_value}',
-      domain: new URL('{context.base_url}').hostname,
+      name: {cookie_name},
+      value: {cookie_value},
+      domain: new URL({base_url}).hostname,
       path: '/',
     }}
   ]);
-  await page.goto("{context.base_url}");
+  await page.goto({base_url});
 """
 
     def _extract_domain(self, url: str) -> str:
@@ -177,11 +187,11 @@ class OAuthAuthStrategy(AuthStrategy):
         # Treat OAuth like token auth - inject the pre-authenticated token
         if config.token:
             token_value = (
-                f"{config.token_prefix} {config.token}" if config.token_prefix else config.token
+                f"{config.auth_prefix} {config.token}" if config.auth_prefix else config.token
             )
             return {
                 "extra_http_headers": {
-                    config.token_header: token_value,
+                    config.auth_header_name: token_value,
                 }
             }
 
@@ -210,10 +220,11 @@ class OAuthAuthStrategy(AuthStrategy):
         if config.cookie_name and config.cookie_value:
             return CookieAuthStrategy().get_playwright_script(context)
 
+        base_url = json.dumps(context.base_url)
         return f"""
   // OAuth authentication (expects pre-authenticated session)
   // Please configure either token or cookie in .nit.yml
-  await page.goto("{context.base_url}");
+  await page.goto({base_url});
 """
 
 
@@ -227,14 +238,20 @@ class CustomAuthStrategy(AuthStrategy):
         if not config.custom_script:
             return {}
 
-        script_path = context.project_root / config.custom_script
+        script_path = (context.project_root / config.custom_script).resolve()
+        try:
+            script_path.relative_to(context.project_root.resolve())
+        except ValueError:
+            msg = f"Custom auth script must be inside project root: {config.custom_script}"
+            raise ValueError(msg) from None
+
         if not script_path.exists():
             msg = f"Custom auth script not found: {script_path}"
             raise FileNotFoundError(msg)
 
         # Execute custom script - it should output JSON with context options
         try:
-            result = subprocess.run(  # noqa: S603
+            result = subprocess.run(
                 [str(script_path)],
                 capture_output=True,
                 text=True,
@@ -259,11 +276,12 @@ class CustomAuthStrategy(AuthStrategy):
     def get_playwright_script(self, context: AuthContext) -> str:
         """Generate Playwright custom auth setup code."""
         config = context.config
+        base_url = json.dumps(context.base_url)
 
         return f"""
   // Custom authentication (handled by external script)
   // Script: {config.custom_script}
-  await page.goto("{context.base_url}");
+  await page.goto({base_url});
 """
 
 

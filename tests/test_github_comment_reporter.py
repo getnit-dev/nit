@@ -167,7 +167,7 @@ class TestGitHubCommentReporter:
         assert "📈" in body  # improvement indicator
 
     @mock.patch("nit.agents.reporters.github_comment.GitHubAPI")
-    def test_post_coverage_delta_with_diff_result(  # noqa: PLR0913
+    def test_post_coverage_delta_with_diff_result(
         self,
         mock_api_class: mock.Mock,
         mock_api: mock.Mock,
@@ -221,7 +221,7 @@ class TestGitHubCommentReporter:
         assert "Failed: 3" in body
 
     @mock.patch("nit.agents.reporters.github_comment.GitHubAPI")
-    def test_post_full_report(  # noqa: PLR0913
+    def test_post_full_report(
         self,
         mock_api_class: mock.Mock,
         mock_api: mock.Mock,

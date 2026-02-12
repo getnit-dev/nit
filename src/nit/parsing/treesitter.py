@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -9,8 +11,12 @@ from typing import TYPE_CHECKING, cast
 import tree_sitter
 import tree_sitter_language_pack as tslp
 
+from nit.utils.cache import FileContentCache, MemoryCache
+
 if TYPE_CHECKING:
     from tree_sitter_language_pack import SupportedLanguage
+
+logger = logging.getLogger(__name__)
 
 # Map file extensions to tree-sitter language names
 EXTENSION_TO_LANGUAGE: dict[str, str] = {
@@ -112,6 +118,13 @@ class ParseResult:
     error_ranges: list[tuple[int, int]] = field(default_factory=list)
 
 
+# ── Module-level caches ──────────────────────────────────────────
+_parser_cache: dict[str, tree_sitter.Parser] = {}
+_language_cache: dict[str, tree_sitter.Language] = {}
+_file_ast_cache: FileContentCache[tree_sitter.Tree] = FileContentCache(max_size=512)
+_code_ast_cache: MemoryCache[tree_sitter.Tree] = MemoryCache(max_size=256)
+
+
 def detect_language(file_path: str | Path) -> str | None:
     """Detect language from file extension.
 
@@ -122,36 +135,58 @@ def detect_language(file_path: str | Path) -> str | None:
 
 
 def get_parser(language: str) -> tree_sitter.Parser:
-    """Get a tree-sitter parser for the given language."""
+    """Get a (cached) tree-sitter parser for the given language."""
     if language not in SUPPORTED_LANGUAGES:
         raise ValueError(f"Unsupported language: {language}")
-    return tslp.get_parser(cast("SupportedLanguage", language))
+    cached = _parser_cache.get(language)
+    if cached is not None:
+        return cached
+    parser = tslp.get_parser(cast("SupportedLanguage", language))
+    _parser_cache[language] = parser
+    return parser
 
 
 def get_language(language: str) -> tree_sitter.Language:
-    """Get a tree-sitter Language object for the given language."""
+    """Get a (cached) tree-sitter Language object for the given language."""
     if language not in SUPPORTED_LANGUAGES:
         raise ValueError(f"Unsupported language: {language}")
-    return tslp.get_language(cast("SupportedLanguage", language))
+    cached = _language_cache.get(language)
+    if cached is not None:
+        return cached
+    lang = tslp.get_language(cast("SupportedLanguage", language))
+    _language_cache[language] = lang
+    return lang
 
 
 def parse_code(source: bytes, language: str) -> tree_sitter.Tree:
-    """Parse source code bytes into a tree-sitter AST."""
+    """Parse source code bytes into a tree-sitter AST (cached by content hash)."""
+    key = hashlib.sha256(source).hexdigest()[:16] + ":" + language
+    cached = _code_ast_cache.get(key)
+    if cached is not None:
+        return cached
     parser = get_parser(language)
-    return parser.parse(source)
+    tree = parser.parse(source)
+    _code_ast_cache.put(key, tree)
+    return tree
 
 
 def parse_file(file_path: str | Path) -> tree_sitter.Tree:
-    """Parse a source file into a tree-sitter AST.
+    """Parse a source file into a tree-sitter AST (cached by file mtime).
 
     Raises ValueError if the language cannot be detected.
     """
     path = Path(file_path)
+    cached = _file_ast_cache.get(path)
+    if cached is not None:
+        return cached
     language = detect_language(path)
     if language is None:
         raise ValueError(f"Cannot detect language for: {path}")
     source = path.read_bytes()
-    return parse_code(source, language)
+    parser = get_parser(language)
+    tree = parser.parse(source)
+    _file_ast_cache.put(path, tree)
+    return tree
 
 
 def query_ast(

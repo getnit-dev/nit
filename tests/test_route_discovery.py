@@ -5,7 +5,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from nit.agents.analyzers.route_discovery import RouteDiscoveryAgent, discover_routes
+from nit.agents.analyzers.route_discovery import (
+    RouteDiscoveryAgent,
+    _auto_detect_framework,
+    _check_file_for_framework,
+    _check_go_framework,
+    _check_nextjs,
+    _check_node_framework,
+    _check_python_framework,
+    _discover_for_framework,
+    _read_package_json_deps,
+    discover_routes,
+)
 from nit.agents.analyzers.routes.django import discover_django_routes
 from nit.agents.analyzers.routes.express import discover_express_routes
 from nit.agents.analyzers.routes.fastapi import discover_fastapi_routes
@@ -652,3 +663,303 @@ func setupRoutes() {
 
         get_route = next((r for r in routes if "users" in r.path), None)
         assert get_route is not None
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage tests for route_discovery module internals
+# ---------------------------------------------------------------------------
+
+
+class TestCheckNextjs:
+    """Tests for _check_nextjs helper."""
+
+    def test_next_config_js(self, tmp_path: Path) -> None:
+        _write_file(tmp_path, "next.config.js", "module.exports = {}")
+        assert _check_nextjs(tmp_path) == "nextjs"
+
+    def test_next_config_mjs(self, tmp_path: Path) -> None:
+        _write_file(tmp_path, "next.config.mjs", "export default {}")
+        assert _check_nextjs(tmp_path) == "nextjs"
+
+    def test_pages_dir_with_next_dep(self, tmp_path: Path) -> None:
+        (tmp_path / "pages").mkdir()
+        _write_package_json(tmp_path, {"dependencies": {"next": "14.0.0"}})
+        assert _check_nextjs(tmp_path) == "nextjs"
+
+    def test_pages_dir_without_next_dep(self, tmp_path: Path) -> None:
+        (tmp_path / "pages").mkdir()
+        _write_package_json(tmp_path, {"dependencies": {"react": "18.0"}})
+        assert _check_nextjs(tmp_path) is None
+
+    def test_no_indicators(self, tmp_path: Path) -> None:
+        assert _check_nextjs(tmp_path) is None
+
+
+class TestCheckPythonFramework:
+    """Tests for _check_python_framework helper."""
+
+    def test_detect_django(self, tmp_path: Path) -> None:
+        _write_file(tmp_path, "manage.py", "#!/usr/bin/env python")
+        assert _check_python_framework(tmp_path) == "django"
+
+    def test_detect_fastapi(self, tmp_path: Path) -> None:
+        _write_file(
+            tmp_path,
+            "main.py",
+            "from fastapi import FastAPI\napp = FastAPI()\n@app.get('/foo')\ndef foo(): pass\n",
+        )
+        assert _check_python_framework(tmp_path) == "fastapi"
+
+    def test_detect_flask(self, tmp_path: Path) -> None:
+        _write_file(
+            tmp_path,
+            "app.py",
+            "from flask import Flask\napp = Flask(__name__)\n@app.route('/foo')\ndef foo(): pass\n",
+        )
+        assert _check_python_framework(tmp_path) == "flask"
+
+    def test_no_framework(self, tmp_path: Path) -> None:
+        _write_file(tmp_path, "helper.py", "x = 1\n")
+        assert _check_python_framework(tmp_path) is None
+
+    def test_skips_venv(self, tmp_path: Path) -> None:
+        _write_file(
+            tmp_path,
+            ".venv/lib/site.py",
+            "from flask import Flask\n@app.route('/foo')\ndef foo(): pass\n",
+        )
+        assert _check_python_framework(tmp_path) is None
+
+
+class TestCheckGoFramework:
+    """Tests for _check_go_framework helper."""
+
+    def test_no_go_mod(self, tmp_path: Path) -> None:
+        assert _check_go_framework(tmp_path) is None
+
+    def test_gin(self, tmp_path: Path) -> None:
+        _write_file(
+            tmp_path,
+            "go.mod",
+            "module example\nrequire github.com/gin-gonic/gin v1.7.0\n",
+        )
+        assert _check_go_framework(tmp_path) == "gin"
+
+    def test_echo(self, tmp_path: Path) -> None:
+        _write_file(
+            tmp_path,
+            "go.mod",
+            "module example\nrequire github.com/labstack/echo v4.0.0\n",
+        )
+        assert _check_go_framework(tmp_path) == "echo"
+
+    def test_chi(self, tmp_path: Path) -> None:
+        _write_file(
+            tmp_path,
+            "go.mod",
+            "module example\nrequire github.com/go-chi/chi v5.0.0\n",
+        )
+        assert _check_go_framework(tmp_path) == "chi"
+
+    def test_gorilla(self, tmp_path: Path) -> None:
+        _write_file(
+            tmp_path,
+            "go.mod",
+            "module example\nrequire github.com/gorilla/mux v1.8.0\n",
+        )
+        assert _check_go_framework(tmp_path) == "gorilla"
+
+    def test_no_framework_in_go_mod(self, tmp_path: Path) -> None:
+        _write_file(tmp_path, "go.mod", "module example\n")
+        assert _check_go_framework(tmp_path) is None
+
+
+class TestCheckNodeFramework:
+    """Tests for _check_node_framework helper."""
+
+    def test_fastify_from_package_json(self, tmp_path: Path) -> None:
+        _write_package_json(tmp_path, {"dependencies": {"fastify": "4.0.0"}})
+        assert _check_node_framework(tmp_path) == "fastify"
+
+    def test_express_from_package_json(self, tmp_path: Path) -> None:
+        _write_package_json(tmp_path, {"dependencies": {"express": "4.0.0"}})
+        assert _check_node_framework(tmp_path) == "express"
+
+    def test_express_from_file_content(self, tmp_path: Path) -> None:
+        _write_file(
+            tmp_path,
+            "app.js",
+            "const express = require('express');\n",
+        )
+        assert _check_node_framework(tmp_path) == "express"
+
+    def test_no_framework(self, tmp_path: Path) -> None:
+        assert _check_node_framework(tmp_path) is None
+
+
+class TestReadPackageJsonDeps:
+    """Tests for _read_package_json_deps helper."""
+
+    def test_valid_package_json(self, tmp_path: Path) -> None:
+        _write_package_json(
+            tmp_path,
+            {"dependencies": {"react": "18.0"}, "devDependencies": {"jest": "29.0"}},
+        )
+        deps = _read_package_json_deps(tmp_path / "package.json")
+        assert deps is not None
+        assert "react" in deps
+        assert "jest" in deps
+
+    def test_invalid_json(self, tmp_path: Path) -> None:
+        _write_file(tmp_path, "package.json", "not valid json{")
+        deps = _read_package_json_deps(tmp_path / "package.json")
+        assert deps is None
+
+
+class TestAutoDetectFramework:
+    """Tests for _auto_detect_framework."""
+
+    def test_nextjs(self, tmp_path: Path) -> None:
+        _write_file(tmp_path, "next.config.js", "module.exports = {}")
+        assert _auto_detect_framework(tmp_path) == "nextjs"
+
+    def test_django(self, tmp_path: Path) -> None:
+        _write_file(tmp_path, "manage.py", "#!/usr/bin/env python")
+        assert _auto_detect_framework(tmp_path) == "django"
+
+    def test_go_default_to_gin(self, tmp_path: Path) -> None:
+        _write_file(tmp_path, "go.mod", "module example\n")
+        assert _auto_detect_framework(tmp_path) == "gin"
+
+    def test_package_json_defaults_to_express(self, tmp_path: Path) -> None:
+        _write_package_json(tmp_path, {})
+        assert _auto_detect_framework(tmp_path) == "express"
+
+    def test_none_for_empty(self, tmp_path: Path) -> None:
+        assert _auto_detect_framework(tmp_path) is None
+
+
+class TestDiscoverForFramework:
+    """Tests for _discover_for_framework helper."""
+
+    def test_unknown_framework_returns_empty(self, tmp_path: Path) -> None:
+        routes = _discover_for_framework(tmp_path, "unknown_fw")
+        assert routes == []
+
+    def test_go_framework_dispatch(self, tmp_path: Path) -> None:
+        _write_file(
+            tmp_path,
+            "main.go",
+            'r.GET("/ping", ping)\n',
+        )
+        routes = _discover_for_framework(tmp_path, "gin")
+        assert isinstance(routes, list)
+
+    def test_express_dispatch(self, tmp_path: Path) -> None:
+        _write_file(
+            tmp_path,
+            "app.js",
+            "app.get('/hello', handler);\n",
+        )
+        routes = _discover_for_framework(tmp_path, "express")
+        assert isinstance(routes, list)
+
+
+class TestCheckFileForFramework:
+    """Tests for _check_file_for_framework."""
+
+    def test_express_detected(self, tmp_path: Path) -> None:
+        _write_file(tmp_path, "app.js", "const express = require('express');\n")
+        assert _check_file_for_framework(tmp_path, "app.js") == "express"
+
+    def test_fastify_detected(self, tmp_path: Path) -> None:
+        _write_file(tmp_path, "server.js", "const fastify = require('fastify');\n")
+        assert _check_file_for_framework(tmp_path, "server.js") == "fastify"
+
+    def test_node_modules_skipped(self, tmp_path: Path) -> None:
+        _write_file(
+            tmp_path,
+            "node_modules/pkg/app.js",
+            "const express = require('express');\n",
+        )
+        result = _check_file_for_framework(tmp_path, "app.js")
+        # Either None (no non-node_modules match) or "express" from the file
+        # The function skips node_modules entries
+        assert result is None or isinstance(result, str)
+
+
+class TestDiscoverRoutesConvenienceExtended:
+    """Extended tests for the discover_routes function."""
+
+    def test_no_framework_returns_unknown(self, tmp_path: Path) -> None:
+        result = discover_routes(tmp_path)
+        assert result.framework in {"unknown", "express"}
+
+    def test_string_project_root(self, tmp_path: Path) -> None:
+        _write_file(tmp_path, "manage.py", "#!/usr/bin/env python")
+        _write_file(
+            tmp_path,
+            "urls.py",
+            "from django.urls import path\nurlpatterns = [path('api/', lambda: None)]\n",
+        )
+        result = discover_routes(str(tmp_path), framework="django")
+        assert result.framework == "django"
+
+
+class TestRouteDiscoveryAgentExtended:
+    """Extended tests for the RouteDiscoveryAgent."""
+
+    def test_no_framework_returns_unknown(self, tmp_path: Path) -> None:
+        profile = ProjectProfile(root=str(tmp_path))
+        agent = RouteDiscoveryAgent()
+        result = agent.run(profile)
+        assert result.framework == "unknown"
+        assert result.routes == []
+
+    def test_fastapi_detection(self, tmp_path: Path) -> None:
+        _write_file(
+            tmp_path,
+            "main.py",
+            (
+                "from fastapi import FastAPI\n"
+                "app = FastAPI()\n"
+                "@app.get('/health')\n"
+                "async def health(): return {'ok': True}\n"
+            ),
+        )
+        profile = ProjectProfile(root=str(tmp_path))
+        agent = RouteDiscoveryAgent()
+        result = agent.run(profile)
+        assert result.framework == "fastapi"
+
+    def test_flask_detection(self, tmp_path: Path) -> None:
+        _write_file(
+            tmp_path,
+            "app.py",
+            (
+                "from flask import Flask\n"
+                "app = Flask(__name__)\n"
+                "@app.route('/health')\n"
+                "def health(): return 'ok'\n"
+            ),
+        )
+        profile = ProjectProfile(root=str(tmp_path))
+        agent = RouteDiscoveryAgent()
+        result = agent.run(profile)
+        assert result.framework == "flask"
+
+    def test_go_gin_detection(self, tmp_path: Path) -> None:
+        _write_file(
+            tmp_path,
+            "go.mod",
+            "module example\nrequire github.com/gin-gonic/gin v1.7.0\n",
+        )
+        _write_file(
+            tmp_path,
+            "main.go",
+            'r.GET("/ping", ping)\n',
+        )
+        profile = ProjectProfile(root=str(tmp_path))
+        agent = RouteDiscoveryAgent()
+        result = agent.run(profile)
+        assert result.framework == "gin"

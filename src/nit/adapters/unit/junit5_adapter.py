@@ -7,6 +7,7 @@ with Gradle or Maven.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -21,12 +22,15 @@ from nit.adapters.base import (
     TestFrameworkAdapter,
     ValidationResult,
 )
+from nit.adapters.coverage.jacoco import JaCoCoAdapter
 from nit.llm.prompts.junit5_prompt import JUnit5Template
 from nit.parsing.treesitter import (
     collect_error_ranges,
     has_parse_errors,
     parse_code,
 )
+
+logger = logging.getLogger(__name__)
 
 _JAVA_LANGUAGE = "java"
 
@@ -316,8 +320,12 @@ class JUnit5Adapter(TestFrameworkAdapter):
         *,
         test_files: list[Path] | None = None,
         timeout: float = _DEFAULT_TIMEOUT,
+        collect_coverage: bool = True,
     ) -> RunResult:
-        """Execute tests via Gradle or Maven and parse XML reports."""
+        """Execute tests via Gradle or Maven and parse XML reports.
+
+        Optionally collects coverage using JaCoCoAdapter.
+        """
         gradlew = project_path / "gradlew"
         gradlew_bat = project_path / "gradlew.bat"
         if gradlew.is_file() or gradlew_bat.is_file():
@@ -343,6 +351,22 @@ class JUnit5Adapter(TestFrameworkAdapter):
                 continue
 
         aggregate.success = aggregate.failed == 0 and aggregate.errors == 0 and aggregate.total > 0
+
+        # Collect coverage if requested
+        if collect_coverage:
+            try:
+                coverage_adapter = JaCoCoAdapter()
+                coverage_report = await coverage_adapter.run_coverage(
+                    project_path, test_files=test_files, timeout=timeout
+                )
+                aggregate.coverage = coverage_report
+                logger.info(
+                    "Coverage collected: %.1f%% line coverage",
+                    coverage_report.overall_line_coverage,
+                )
+            except Exception as e:
+                logger.warning("Failed to collect coverage: %s", e)
+
         return aggregate
 
     def validate_test(self, test_code: str) -> ValidationResult:
@@ -357,6 +381,14 @@ class JUnit5Adapter(TestFrameworkAdapter):
         error_ranges = collect_error_ranges(root)
         errors = [f"Syntax error at line {start}-{end}" for start, end in error_ranges]
         return ValidationResult(valid=False, errors=errors)
+
+    def get_required_packages(self) -> list[str]:
+        """Return required packages for JUnit 5."""
+        return []  # JUnit is typically managed by Maven/Gradle
+
+    def get_required_commands(self) -> list[str]:
+        """Return required commands for JUnit 5."""
+        return ["java"]
 
 
 def _path_to_class_name(path: Path, project_path: Path) -> str:

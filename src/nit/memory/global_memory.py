@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 # Global memory filename
 _GLOBAL_MEMORY_FILE = "global.json"
 
+# Display constants for markdown export
+_MAX_COVERAGE_SNAPSHOTS = 5
+
 
 @dataclass
 class FailedPattern:
@@ -227,3 +230,94 @@ class GlobalMemory:
         """Clear all global memory."""
         self._store.clear()
         self._load()
+
+    def to_dict(self) -> dict[str, Any]:
+        """Export memory as a dictionary for display or serialization.
+
+        Returns:
+            Dictionary containing all memory data.
+        """
+        return self._data.copy()
+
+    def to_markdown(self) -> str:
+        """Export memory as a human-readable markdown report.
+
+        Returns:
+            Markdown-formatted string containing all memory data.
+        """
+        sections = [
+            "# Global Memory Report",
+            "",
+            *self._format_conventions_section(),
+            *self._format_known_patterns_section(),
+            *self._format_failed_patterns_section(),
+            *self._format_statistics_section(),
+        ]
+        return "\n".join(sections)
+
+    def _format_conventions_section(self) -> list[str]:
+        """Format conventions section for markdown export."""
+        lines = ["## Conventions", ""]
+        conventions = self.get_conventions()
+        if conventions:
+            lines.extend(f"- **{key}**: {value}" for key, value in conventions.items())
+        else:
+            lines.append("*No conventions recorded*")
+        lines.append("")
+        return lines
+
+    def _format_known_patterns_section(self) -> list[str]:
+        """Format known patterns section for markdown export."""
+        lines = ["## Known Patterns", ""]
+        known_patterns = self.get_known_patterns()
+        if not known_patterns:
+            lines.extend(["*No known patterns recorded*", ""])
+            return lines
+
+        for idx, pattern in enumerate(known_patterns, start=1):
+            lines.append(f"### Pattern {idx}")
+            lines.append(f"- **Pattern**: `{pattern.get('pattern', 'N/A')}`")
+            lines.append(f"- **Success Count**: {pattern.get('success_count', 0)}")
+            lines.append(f"- **Last Used**: {pattern.get('last_used', 'Never')}")
+            if pattern.get("context"):
+                lines.append(f"- **Context**: {pattern['context']}")
+            lines.append("")
+        return lines
+
+    def _format_failed_patterns_section(self) -> list[str]:
+        """Format failed patterns section for markdown export."""
+        lines = ["## Failed Patterns", ""]
+        failed_patterns = self.get_failed_patterns()
+        if not failed_patterns:
+            lines.extend(["*No failed patterns recorded*", ""])
+            return lines
+
+        for idx, pattern in enumerate(failed_patterns, start=1):
+            lines.append(f"### Failed Pattern {idx}")
+            lines.append(f"- **Pattern**: `{pattern.get('pattern', 'N/A')}`")
+            lines.append(f"- **Reason**: {pattern.get('reason', 'Unknown')}")
+            lines.append(f"- **Timestamp**: {pattern.get('timestamp', 'Unknown')}")
+            if pattern.get("context"):
+                lines.append(f"- **Context**: {pattern['context']}")
+            lines.append("")
+        return lines
+
+    def _format_statistics_section(self) -> list[str]:
+        """Format statistics section for markdown export."""
+        lines = ["## Generation Statistics", ""]
+        stats = self.get_stats()
+        if stats:
+            lines.extend(
+                [
+                    f"- **Total Runs**: {stats.get('total_runs', 0)}",
+                    f"- **Successful Generations**: {stats.get('successful_generations', 0)}",
+                    f"- **Failed Generations**: {stats.get('failed_generations', 0)}",
+                    f"- **Total Tests Generated**: {stats.get('total_tests_generated', 0)}",
+                    f"- **Total Tests Passing**: {stats.get('total_tests_passing', 0)}",
+                    f"- **Last Run**: {stats.get('last_run', 'Never')}",
+                ]
+            )
+        else:
+            lines.append("*No statistics available*")
+        lines.append("")
+        return lines

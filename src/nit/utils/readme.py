@@ -81,7 +81,7 @@ def _scripts_from_package_json(root: Path) -> list[str]:
         return []
     try:
         data = json.loads(pkg.read_text(encoding="utf-8"))
-    except OSError, json.JSONDecodeError:
+    except (OSError, json.JSONDecodeError):
         return []
     scripts = data.get("scripts")
     if isinstance(scripts, dict):

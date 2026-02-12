@@ -1,0 +1,111 @@
+site_name: nit
+site_description: Open-source AI testing, documentation & quality agent
+site_url: https://docs.getnit.dev
+repo_url: https://github.com/getnit-dev/nit
+repo_name: getnit-dev/nit
+
+theme:
+  name: material
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+    - toc.follow
+  icon:
+    repo: fontawesome/brands/github
+
+extra_css:
+  - stylesheets/extra.css
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/getnit-dev/nit
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - Quickstart: getting-started/quickstart.md
+      - Configuration: getting-started/configuration.md
+  - CLI Reference:
+      - Overview: cli/index.md
+      - Commands: cli/commands.md
+      - Config Commands: cli/config-commands.md
+      - Memory Commands: cli/memory-commands.md
+  - Adapters:
+      - Overview: adapters/index.md
+      - Unit Testing: adapters/unit-testing.md
+      - Coverage: adapters/coverage.md
+      - E2E Testing: adapters/e2e.md
+      - Documentation: adapters/documentation.md
+  - Agents:
+      - Overview: agents/index.md
+      - Analyzers: agents/analyzers.md
+      - Builders: agents/builders.md
+      - Debuggers: agents/debuggers.md
+      - Watchers: agents/watchers.md
+      - Pipelines: agents/pipelines.md
+  - Integrations:
+      - GitHub: integrations/github.md
+      - Slack: integrations/slack.md
+      - Platform: integrations/platform.md
+      - Sentry: integrations/sentry.md
+      - Dashboard: integrations/dashboard.md
+  - LLM:
+      - Overview: llm/index.md
+      - Providers: llm/providers.md
+      - Modes: llm/modes.md
+      - Token Budgets: llm/token-budgets.md
+  - CI/CD:
+      - GitHub Action: ci/github-action.md
+      - Sharding: ci/sharding.md
+      - Monorepo: ci/monorepo.md
+  - Advanced:
+      - Memory: advanced/memory.md
+      - Drift Detection: advanced/drift-detection.md
+      - Custom Adapters: advanced/custom-adapters.md
+      - Environment Variables: advanced/environment-variables.md
+  - Contributing: contributing.md

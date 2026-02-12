@@ -21,6 +21,7 @@ from nit.adapters.base import (
     TestFrameworkAdapter,
     ValidationResult,
 )
+from nit.adapters.coverage.gcov import GcovAdapter
 from nit.llm.prompts.gtest_prompt import GTestTemplate
 from nit.parsing.treesitter import (
     collect_error_ranges,
@@ -133,87 +134,33 @@ class GTestAdapter(TestFrameworkAdapter):
         *,
         test_files: list[Path] | None = None,
         timeout: float = _DEFAULT_TIMEOUT,
+        collect_coverage: bool = True,
     ) -> RunResult:
         """Execute Google Test via CMake/CTest, with direct binary fallback."""
         output_parts: list[str] = []
 
         with tempfile.TemporaryDirectory(prefix="nit_gtest_") as temp_dir:
             report_dir = Path(temp_dir)
-            ctest_report = report_dir / "ctest-results.xml"
-
             build_dir = _find_cmake_build_dir(project_path)
-            if build_dir is not None:
-                build_cmd = ["cmake", "--build", ".", "--target", "test"]
-                build_result = await _run_command(build_cmd, cwd=build_dir, timeout=timeout)
-                output_parts.append(_format_command_output(build_cmd, build_result))
 
-                if build_result.timed_out:
-                    return RunResult(
-                        raw_output="\n\n".join(output_parts),
-                        success=False,
-                    )
+            # Try CTest first
+            ctest_result = await _try_run_via_ctest(
+                build_dir, report_dir, test_files, timeout, output_parts
+            )
+            if ctest_result is not None:
+                return ctest_result
 
-                if not build_result.not_found:
-                    ctest_cmd = [
-                        "ctest",
-                        "--output-on-failure",
-                        "--output-junit",
-                        str(ctest_report),
-                    ]
-                    if test_files:
-                        regex = _ctest_regex_from_test_files(test_files)
-                        if regex:
-                            ctest_cmd.extend(["-R", regex])
-
-                    ctest_result = await _run_command(ctest_cmd, cwd=build_dir, timeout=timeout)
-                    output_parts.append(_format_command_output(ctest_cmd, ctest_result))
-
-                    if ctest_result.timed_out:
-                        return RunResult(
-                            raw_output="\n\n".join(output_parts),
-                            success=False,
-                        )
-
-                    if ctest_report.is_file():
-                        parsed = _parse_gtest_xml(
-                            ctest_report.read_text(encoding="utf-8", errors="replace"),
-                            "\n\n".join(output_parts),
-                        )
-                        parsed.success = (
-                            parsed.failed == 0
-                            and parsed.errors == 0
-                            and ctest_result.returncode == 0
-                        )
-                        return parsed
-
+            # Fall back to direct binary execution
             discovered = _discover_gtest_binaries(project_path, build_dir)
             binaries = _select_binaries(discovered, test_files)
-            if not binaries:
-                output_parts.append("No Google Test binaries found for direct execution.")
-                return RunResult(raw_output="\n\n".join(output_parts), success=False)
-
-            aggregate = RunResult(raw_output="")
-            for idx, binary in enumerate(binaries):
-                xml_report = report_dir / f"gtest-{idx}.xml"
-                cmd = [str(binary), f"--gtest_output=xml:{xml_report}"]
-                cmd_result = await _run_command(cmd, cwd=binary.parent, timeout=timeout)
-                output_parts.append(_format_command_output(cmd, cmd_result))
-
-                if cmd_result.timed_out:
-                    aggregate.errors += 1
-                    continue
-
-                if xml_report.is_file():
-                    parsed = _parse_gtest_xml(
-                        xml_report.read_text(encoding="utf-8", errors="replace"),
-                        "\n\n".join(output_parts),
-                    )
-                    _merge_run_results(aggregate, parsed)
-
-            aggregate.raw_output = "\n\n".join(output_parts)
-            aggregate.success = (
-                aggregate.failed == 0 and aggregate.errors == 0 and aggregate.total > 0
+            aggregate = await _run_direct_gtest_binaries(
+                binaries, report_dir, timeout, output_parts
             )
+
+            # Collect coverage if requested
+            if collect_coverage:
+                await _collect_gtest_coverage(aggregate, project_path, test_files, timeout)
+
             return aggregate
 
     def validate_test(self, test_code: str) -> ValidationResult:
@@ -228,6 +175,14 @@ class GTestAdapter(TestFrameworkAdapter):
         error_ranges = collect_error_ranges(root)
         errors = [f"Syntax error at line {start}-{end}" for start, end in error_ranges]
         return ValidationResult(valid=False, errors=errors)
+
+    def get_required_packages(self) -> list[str]:
+        """Return required packages for Google Test."""
+        return []  # GTest is typically built and linked via CMake
+
+    def get_required_commands(self) -> list[str]:
+        """Return required commands for Google Test."""
+        return ["cmake"]
 
 
 # ── Detection helpers ────────────────────────────────────────────
@@ -279,6 +234,113 @@ def _walk_source_files(project_path: Path) -> list[Path]:
 
 
 # ── Execution helpers ────────────────────────────────────────────
+
+
+async def _try_run_via_ctest(
+    build_dir: Path | None,
+    report_dir: Path,
+    test_files: list[Path] | None,
+    timeout: float,
+    output_parts: list[str],
+) -> RunResult | None:
+    """Try to run tests via CTest. Returns None if CTest is not available."""
+    if build_dir is None:
+        return None
+
+    ctest_report = report_dir / "ctest-results.xml"
+
+    build_cmd = ["cmake", "--build", ".", "--target", "test"]
+    build_result = await _run_command(build_cmd, cwd=build_dir, timeout=timeout)
+    output_parts.append(_format_command_output(build_cmd, build_result))
+
+    if build_result.timed_out:
+        return RunResult(raw_output="\n\n".join(output_parts), success=False)
+
+    if build_result.not_found:
+        return None
+
+    ctest_cmd = [
+        "ctest",
+        "--output-on-failure",
+        "--output-junit",
+        str(ctest_report),
+    ]
+    if test_files:
+        regex = _ctest_regex_from_test_files(test_files)
+        if regex:
+            ctest_cmd.extend(["-R", regex])
+
+    ctest_result = await _run_command(ctest_cmd, cwd=build_dir, timeout=timeout)
+    output_parts.append(_format_command_output(ctest_cmd, ctest_result))
+
+    if ctest_result.timed_out:
+        return RunResult(raw_output="\n\n".join(output_parts), success=False)
+
+    if not ctest_report.is_file():
+        return None
+
+    parsed = _parse_gtest_xml(
+        ctest_report.read_text(encoding="utf-8", errors="replace"),
+        "\n\n".join(output_parts),
+    )
+    parsed.success = parsed.failed == 0 and parsed.errors == 0 and ctest_result.returncode == 0
+    return parsed
+
+
+async def _run_direct_gtest_binaries(
+    binaries: list[Path],
+    report_dir: Path,
+    timeout: float,
+    output_parts: list[str],
+) -> RunResult:
+    """Run Google Test binaries directly."""
+
+    if not binaries:
+        output_parts.append("No Google Test binaries found for direct execution.")
+        return RunResult(raw_output="\n\n".join(output_parts), success=False)
+
+    aggregate = RunResult(raw_output="")
+    for idx, binary in enumerate(binaries):
+        xml_report = report_dir / f"gtest-{idx}.xml"
+        cmd = [str(binary), f"--gtest_output=xml:{xml_report}"]
+        cmd_result = await _run_command(cmd, cwd=binary.parent, timeout=timeout)
+        output_parts.append(_format_command_output(cmd, cmd_result))
+
+        if cmd_result.timed_out:
+            aggregate.errors += 1
+            continue
+
+        if xml_report.is_file():
+            parsed = _parse_gtest_xml(
+                xml_report.read_text(encoding="utf-8", errors="replace"),
+                "\n\n".join(output_parts),
+            )
+            _merge_run_results(aggregate, parsed)
+
+    aggregate.raw_output = "\n\n".join(output_parts)
+    aggregate.success = aggregate.failed == 0 and aggregate.errors == 0 and aggregate.total > 0
+    return aggregate
+
+
+async def _collect_gtest_coverage(
+    aggregate: RunResult,
+    project_path: Path,
+    test_files: list[Path] | None,
+    timeout: float,
+) -> None:
+    """Collect coverage for Google Test execution."""
+    try:
+        coverage_adapter = GcovAdapter()
+        coverage_report = await coverage_adapter.run_coverage(
+            project_path, test_files=test_files, timeout=timeout
+        )
+        aggregate.coverage = coverage_report
+        logger.info(
+            "Coverage collected: %.1f%% line coverage",
+            coverage_report.overall_line_coverage,
+        )
+    except Exception as e:
+        logger.warning("Failed to collect coverage: %s", e)
 
 
 def _find_cmake_build_dir(project_path: Path) -> Path | None:

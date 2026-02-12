@@ -7,6 +7,7 @@ repeated execution.
 
 from __future__ import annotations
 
+import importlib
 import logging
 import re
 from dataclasses import dataclass, field
@@ -422,25 +423,147 @@ class SelfHealingEngine:
     async def _analyze_dom(
         self,
         _project_path: Path,
-        _test_code: str,
+        test_code: str,
     ) -> DOMSnapshot:
         """Analyze DOM to find available selectors.
 
-        In a production implementation, this would:
-        1. Launch Playwright browser
-        2. Navigate to the page under test
-        3. Extract all available selectors, test IDs, roles, etc.
-        4. Return structured DOM information
+        Attempts to launch a headless Playwright browser and navigate to
+        the page under test to extract live selector information.  Falls
+        back to static extraction from the test source when Playwright
+        is not installed or the target URL is unreachable.
 
-        For now, returns a mock snapshot.
+        Args:
+            _project_path: Project root path.
+            test_code: The test source code (used to extract the target URL).
 
-        TODO: Implement real DOM analysis with Playwright.
+        Returns:
+            DOMSnapshot with available selectors, test IDs, roles, and text.
         """
+        target_url = self._extract_url_from_test(test_code)
+        if target_url:
+            snapshot = await self._live_dom_snapshot(target_url)
+            if snapshot is not None:
+                return snapshot
+
+        # Fallback: extract selectors statically from test source
+        return self._static_dom_snapshot(test_code)
+
+    async def _live_dom_snapshot(self, url: str) -> DOMSnapshot | None:
+        """Launch a headless browser and extract DOM information.
+
+        Returns ``None`` when Playwright is not installed or the page
+        cannot be loaded, allowing the caller to fall back gracefully.
+        """
+        try:
+            pw_api = importlib.import_module("playwright.async_api")
+        except ImportError:
+            logger.debug("playwright package not installed — skipping live DOM analysis")
+            return None
+
+        try:
+            async with pw_api.async_playwright() as pw:
+                browser = await pw.chromium.launch(headless=True)
+                try:
+                    page = await browser.new_page()
+                    await page.goto(url, wait_until="domcontentloaded", timeout=15_000)
+
+                    # Extract selectors, data-testid values, ARIA roles and text
+                    dom_data: dict[str, list[str]] = await page.evaluate("""() => {
+                        const MAX = 200;
+                        const selectors = [];
+                        const testIds = [];
+                        const roles = new Set();
+                        const texts = [];
+
+                        for (const el of document.querySelectorAll('*')) {
+                            if (selectors.length >= MAX) break;
+
+                            // CSS id selector
+                            if (el.id) selectors.push('#' + el.id);
+
+                            // data-testid
+                            const tid = el.getAttribute('data-testid')
+                                      || el.getAttribute('data-test-id');
+                            if (tid) testIds.push(tid);
+
+                            // ARIA role
+                            const role = el.getAttribute('role')
+                                      || el.tagName.toLowerCase();
+                            if (role) roles.add(role);
+
+                            // Visible text (trimmed, non-empty, short)
+                            const txt = (el.textContent || '').trim();
+                            if (txt && txt.length < 100 && !el.children.length) {
+                                texts.push(txt);
+                            }
+                        }
+
+                        return {
+                            selectors: [...new Set(selectors)].slice(0, MAX),
+                            testIds:   [...new Set(testIds)].slice(0, MAX),
+                            roles:     [...roles].slice(0, MAX),
+                            texts:     [...new Set(texts)].slice(0, MAX),
+                        };
+                    }""")
+
+                    return DOMSnapshot(
+                        selectors=dom_data.get("selectors", []),
+                        test_ids=dom_data.get("testIds", []),
+                        roles=dom_data.get("roles", []),
+                        text_content=dom_data.get("texts", []),
+                    )
+                finally:
+                    await browser.close()
+
+        except Exception as exc:
+            logger.warning("Live DOM analysis failed for %s: %s", url, exc)
+            return None
+
+    # ── Static helpers ────────────────────────────────────────────────
+
+    _URL_PATTERN = re.compile(
+        r"""page\.goto\(\s*['"`](https?://[^'"`]+)['"`]""",
+        re.IGNORECASE,
+    )
+
+    def _extract_url_from_test(self, test_code: str) -> str:
+        """Extract the first ``page.goto(...)`` URL from test source."""
+        match = self._URL_PATTERN.search(test_code)
+        return match.group(1) if match else ""
+
+    _STATIC_SELECTOR_RE = re.compile(
+        r"""(?:locator|getBy\w+|querySelector|page\.\$)\(\s*['"`]([^'"`]+)['"`]""",
+    )
+
+    def _static_dom_snapshot(self, test_code: str) -> DOMSnapshot:
+        """Build a best-effort DOMSnapshot from selectors found in test code."""
+        raw_selectors = self._STATIC_SELECTOR_RE.findall(test_code)
+
+        selectors: list[str] = []
+        test_ids: list[str] = []
+        roles: list[str] = []
+        texts: list[str] = []
+
+        seen: set[str] = set()
+        for sel in raw_selectors:
+            if sel in seen:
+                continue
+            seen.add(sel)
+
+            if sel.startswith(("#", ".", "[")):
+                selectors.append(sel)
+            elif sel.startswith("role="):
+                roles.append(sel.split("=", 1)[1])
+            elif sel.startswith("data-testid="):
+                test_ids.append(sel.split("=", 1)[1])
+            else:
+                texts.append(sel)
+
         return DOMSnapshot(
-            selectors=["#login-button", "#username", "#password"],
-            test_ids=["login-btn", "username-input", "password-input"],
-            roles=["button", "textbox"],
-            text_content=["Login", "Sign In", "Submit"],
+            selectors=selectors,
+            test_ids=test_ids,
+            roles=roles,
+            text_content=texts,
         )
 
     def _build_healing_prompt(

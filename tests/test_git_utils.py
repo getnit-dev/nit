@@ -10,12 +10,26 @@ from unittest import mock
 import pytest
 
 from nit.utils.git import (
+    CommitInfo,
     GitHubAPI,
     GitHubAPIError,
     GitHubPRInfo,
+    GitOperationError,
+    PullRequestParams,
+    _extract_pr_number_from_branch,
+    _parse_github_url,
+    add_files,
+    commit,
     compute_comment_marker,
+    create_branch,
+    get_commits_between,
+    get_current_branch,
+    get_default_branch,
     get_pr_info_from_env,
     get_pr_info_from_git,
+    get_remote_url,
+    is_gh_cli_available,
+    push_branch,
 )
 
 
@@ -324,3 +338,441 @@ class TestComputeCommentMarker:
         marker2 = compute_comment_marker("nit:report")
 
         assert marker1 == marker2
+
+
+# ---------------------------------------------------------------------------
+# _parse_github_url
+# ---------------------------------------------------------------------------
+
+
+class TestParseGitHubUrl:
+    def test_https_url(self) -> None:
+        owner, repo = _parse_github_url("https://github.com/foo/bar.git")
+        assert owner == "foo"
+        assert repo == "bar"
+
+    def test_https_url_no_git_suffix(self) -> None:
+        owner, repo = _parse_github_url("https://github.com/foo/bar")
+        assert owner == "foo"
+        assert repo == "bar"
+
+    def test_ssh_url(self) -> None:
+        owner, repo = _parse_github_url("git@github.com:foo/bar.git")
+        assert owner == "foo"
+        assert repo == "bar"
+
+    def test_ssh_url_no_git_suffix(self) -> None:
+        owner, repo = _parse_github_url("git@github.com:foo/bar")
+        assert owner == "foo"
+        assert repo == "bar"
+
+    def test_non_github_url(self) -> None:
+        owner, repo = _parse_github_url("https://gitlab.com/foo/bar.git")
+        assert owner is None
+        assert repo is None
+
+
+# ---------------------------------------------------------------------------
+# _extract_pr_number_from_branch
+# ---------------------------------------------------------------------------
+
+
+class TestExtractPRNumber:
+    def test_pr_dash_pattern(self) -> None:
+        assert _extract_pr_number_from_branch("pr-42") == 42
+
+    def test_pr_slash_pattern(self) -> None:
+        assert _extract_pr_number_from_branch("pr/123") == 123
+
+    def test_number_dash_pattern(self) -> None:
+        assert _extract_pr_number_from_branch("99-feature") == 99
+
+    def test_no_number(self) -> None:
+        assert _extract_pr_number_from_branch("feature-branch") is None
+
+    def test_main_branch(self) -> None:
+        assert _extract_pr_number_from_branch("main") is None
+
+
+# ---------------------------------------------------------------------------
+# is_gh_cli_available
+# ---------------------------------------------------------------------------
+
+
+class TestIsGhCliAvailable:
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_gh_available_and_authed(self, mock_run: mock.Mock) -> None:
+        mock_run.return_value = mock.Mock(returncode=0)
+        assert is_gh_cli_available() is True
+
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_gh_not_installed(self, mock_run: mock.Mock) -> None:
+        mock_run.return_value = mock.Mock(returncode=1)
+        assert is_gh_cli_available() is False
+
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_gh_not_found(self, mock_run: mock.Mock) -> None:
+        mock_run.side_effect = FileNotFoundError("gh not found")
+        assert is_gh_cli_available() is False
+
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_gh_installed_not_authed(self, mock_run: mock.Mock) -> None:
+        # First call (--version) succeeds, second call (auth status) fails
+        mock_run.side_effect = [
+            mock.Mock(returncode=0),
+            mock.Mock(returncode=1),
+        ]
+        assert is_gh_cli_available() is False
+
+
+# ---------------------------------------------------------------------------
+# get_commits_between
+# ---------------------------------------------------------------------------
+
+
+class TestGetCommitsBetween:
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_commits_parsed(self, mock_run: mock.Mock) -> None:
+        mock_run.return_value = mock.Mock(
+            stdout=(
+                "abc123\nFirst commit\nbody text\n---COMMIT_END---\n"
+                "def456\nSecond commit\n\n---COMMIT_END---\n"
+            )
+        )
+        commits = get_commits_between(Path("/repo"), "v1.0", "HEAD")
+        assert len(commits) == 2
+        assert commits[0].sha == "abc123"
+        assert commits[0].subject == "First commit"
+        assert commits[0].body == "body text"
+        assert commits[1].sha == "def456"
+        assert commits[1].subject == "Second commit"
+
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_empty_output(self, mock_run: mock.Mock) -> None:
+        mock_run.return_value = mock.Mock(stdout="")
+        commits = get_commits_between(Path("/repo"), "v1.0", "HEAD")
+        assert commits == []
+
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_git_error(self, mock_run: mock.Mock) -> None:
+        mock_run.side_effect = subprocess.CalledProcessError(1, "git")
+        with pytest.raises(GitOperationError, match="Failed to get commits"):
+            get_commits_between(Path("/repo"), "v1.0", "HEAD")
+
+    def test_invalid_ref_newline(self) -> None:
+        with pytest.raises(GitOperationError, match="unsafe characters"):
+            get_commits_between(Path("/repo"), "v1\n.0", "HEAD")
+
+    def test_invalid_ref_null(self) -> None:
+        with pytest.raises(GitOperationError, match="unsafe characters"):
+            get_commits_between(Path("/repo"), "v1.0", "HEAD\0")
+
+
+# ---------------------------------------------------------------------------
+# get_default_branch
+# ---------------------------------------------------------------------------
+
+
+class TestGetDefaultBranch:
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_symbolic_ref_success(self, mock_run: mock.Mock) -> None:
+        mock_run.return_value = mock.Mock(stdout="refs/remotes/origin/main\n")
+        assert get_default_branch(Path("/repo")) == "main"
+
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_fallback_main(self, mock_run: mock.Mock) -> None:
+        # symbolic-ref fails, rev-parse for "main" succeeds
+        mock_run.side_effect = [
+            subprocess.CalledProcessError(1, "git"),
+            mock.Mock(returncode=0),
+        ]
+        assert get_default_branch(Path("/repo")) == "main"
+
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_fallback_master(self, mock_run: mock.Mock) -> None:
+        # symbolic-ref fails, "main" fails, "master" succeeds
+        mock_run.side_effect = [
+            subprocess.CalledProcessError(1, "git"),
+            subprocess.CalledProcessError(1, "git"),
+            mock.Mock(returncode=0),
+        ]
+        assert get_default_branch(Path("/repo")) == "master"
+
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_fallback_default(self, mock_run: mock.Mock) -> None:
+        # Everything fails, defaults to "main"
+        mock_run.side_effect = subprocess.CalledProcessError(1, "git")
+        assert get_default_branch(Path("/repo")) == "main"
+
+
+# ---------------------------------------------------------------------------
+# get_current_branch
+# ---------------------------------------------------------------------------
+
+
+class TestGetCurrentBranch:
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_success(self, mock_run: mock.Mock) -> None:
+        mock_run.return_value = mock.Mock(stdout="feature-branch\n")
+        assert get_current_branch(Path("/repo")) == "feature-branch"
+
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_failure(self, mock_run: mock.Mock) -> None:
+        mock_run.side_effect = subprocess.CalledProcessError(1, "git")
+        with pytest.raises(GitOperationError, match="Failed to get current branch"):
+            get_current_branch(Path("/repo"))
+
+
+# ---------------------------------------------------------------------------
+# create_branch
+# ---------------------------------------------------------------------------
+
+
+class TestCreateBranch:
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_create_branch_no_base(self, mock_run: mock.Mock) -> None:
+        create_branch(Path("/repo"), "new-branch")
+        cmd = mock_run.call_args[0][0]
+        assert "checkout" in cmd
+        assert "-b" in cmd
+        assert "new-branch" in cmd
+
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_create_branch_with_base(self, mock_run: mock.Mock) -> None:
+        create_branch(Path("/repo"), "new-branch", base="main")
+        cmd = mock_run.call_args[0][0]
+        assert "main" in cmd
+
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_create_branch_failure(self, mock_run: mock.Mock) -> None:
+        mock_run.side_effect = subprocess.CalledProcessError(1, "git")
+        with pytest.raises(GitOperationError, match="Failed to create branch"):
+            create_branch(Path("/repo"), "bad-branch")
+
+
+# ---------------------------------------------------------------------------
+# add_files
+# ---------------------------------------------------------------------------
+
+
+class TestAddFiles:
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_add_files(self, mock_run: mock.Mock) -> None:
+        add_files(Path("/repo"), ["file1.py", "file2.py"])
+        cmd = mock_run.call_args[0][0]
+        assert "add" in cmd
+        assert "file1.py" in cmd
+
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_add_files_failure(self, mock_run: mock.Mock) -> None:
+        mock_run.side_effect = subprocess.CalledProcessError(1, "git")
+        with pytest.raises(GitOperationError, match="Failed to add files"):
+            add_files(Path("/repo"), ["file.py"])
+
+
+# ---------------------------------------------------------------------------
+# commit
+# ---------------------------------------------------------------------------
+
+
+class TestCommit:
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_commit_success(self, mock_run: mock.Mock) -> None:
+        mock_run.side_effect = [
+            mock.Mock(),  # git commit
+            mock.Mock(stdout="abc123\n"),  # git rev-parse HEAD
+        ]
+        sha = commit(Path("/repo"), "test message")
+        assert sha == "abc123"
+
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_commit_failure(self, mock_run: mock.Mock) -> None:
+        mock_run.side_effect = subprocess.CalledProcessError(1, "git")
+        with pytest.raises(GitOperationError, match="Failed to commit"):
+            commit(Path("/repo"), "msg")
+
+
+# ---------------------------------------------------------------------------
+# push_branch
+# ---------------------------------------------------------------------------
+
+
+class TestPushBranch:
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_push_branch(self, mock_run: mock.Mock) -> None:
+        push_branch(Path("/repo"), "feature")
+        cmd = mock_run.call_args[0][0]
+        assert "push" in cmd
+        assert "feature" in cmd
+        assert "--force" not in cmd
+
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_push_branch_force(self, mock_run: mock.Mock) -> None:
+        push_branch(Path("/repo"), "feature", force=True)
+        cmd = mock_run.call_args[0][0]
+        assert "--force" in cmd
+
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_push_branch_failure(self, mock_run: mock.Mock) -> None:
+        mock_run.side_effect = subprocess.CalledProcessError(1, "git")
+        with pytest.raises(GitOperationError, match="Failed to push branch"):
+            push_branch(Path("/repo"), "feature")
+
+
+# ---------------------------------------------------------------------------
+# get_remote_url
+# ---------------------------------------------------------------------------
+
+
+class TestGetRemoteUrl:
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_success(self, mock_run: mock.Mock) -> None:
+        mock_run.return_value = mock.Mock(stdout="https://github.com/foo/bar.git\n")
+        url = get_remote_url(Path("/repo"))
+        assert url == "https://github.com/foo/bar.git"
+
+    @mock.patch("nit.utils.git.subprocess.run")
+    def test_failure(self, mock_run: mock.Mock) -> None:
+        mock_run.side_effect = subprocess.CalledProcessError(1, "git")
+        with pytest.raises(GitOperationError, match="Failed to get remote URL"):
+            get_remote_url(Path("/repo"))
+
+
+# ---------------------------------------------------------------------------
+# GitHubAPI — extended tests
+# ---------------------------------------------------------------------------
+
+
+class TestGitHubAPIExtended:
+    @mock.patch("nit.utils.git.requests")
+    def test_create_pull_request(self, mock_requests: mock.Mock) -> None:
+        mock_response = mock.Mock()
+        mock_response.json.return_value = {
+            "number": 42,
+            "html_url": "https://github.com/...",
+        }
+        mock_requests.post.return_value = mock_response
+
+        api = GitHubAPI(token="test-token")  # noqa: S106
+        params = PullRequestParams(
+            owner="o",
+            repo="r",
+            title="My PR",
+            body="desc",
+            head="feature",
+            base="main",
+        )
+        result = api.create_pull_request(params)
+        assert result["number"] == 42
+
+    @mock.patch("nit.utils.git.requests")
+    def test_create_issue(self, mock_requests: mock.Mock) -> None:
+        mock_response = mock.Mock()
+        mock_response.json.return_value = {"number": 1}
+        mock_requests.post.return_value = mock_response
+
+        api = GitHubAPI(token="test-token")  # noqa: S106
+        result = api.create_issue("o", "r", "title", "body", labels=["bug"])
+        assert result["number"] == 1
+
+    @mock.patch("nit.utils.git.requests")
+    def test_create_issue_no_labels(self, mock_requests: mock.Mock) -> None:
+        mock_response = mock.Mock()
+        mock_response.json.return_value = {"number": 2}
+        mock_requests.post.return_value = mock_response
+
+        api = GitHubAPI(token="test-token")  # noqa: S106
+        result = api.create_issue("o", "r", "title", "body")
+        assert result["number"] == 2
+
+    @mock.patch("nit.utils.git.requests")
+    def test_create_issue_comment(self, mock_requests: mock.Mock) -> None:
+        mock_response = mock.Mock()
+        mock_response.json.return_value = {"id": 77}
+        mock_requests.post.return_value = mock_response
+
+        api = GitHubAPI(token="test-token")  # noqa: S106
+        result = api.create_issue_comment("o", "r", 5, "comment text")
+        assert result["id"] == 77
+
+    @mock.patch("nit.utils.git.requests")
+    def test_get_error(self, mock_requests: mock.Mock) -> None:
+        mock_requests.get.side_effect = Exception("timeout")
+        api = GitHubAPI(token="test-token")  # noqa: S106
+        pr = GitHubPRInfo(owner="o", repo="r", pr_number=1)
+        with pytest.raises(GitHubAPIError, match="GET request failed"):
+            api.find_comment_by_marker(pr, "marker")
+
+    @mock.patch("nit.utils.git.requests")
+    def test_patch_error(self, mock_requests: mock.Mock) -> None:
+        mock_requests.patch.side_effect = Exception("timeout")
+        api = GitHubAPI(token="test-token")  # noqa: S106
+        pr = GitHubPRInfo(owner="o", repo="r", pr_number=1)
+        with pytest.raises(GitHubAPIError, match="PATCH request failed"):
+            api.update_comment(pr, 1, "body")
+
+    @mock.patch("nit.utils.git.requests")
+    def test_upsert_adds_marker(self, mock_requests: mock.Mock) -> None:
+        """upsert_comment adds marker to body if missing."""
+        get_resp = mock.Mock()
+        get_resp.json.return_value = []
+        mock_requests.get.return_value = get_resp
+
+        post_resp = mock.Mock()
+        post_resp.json.return_value = {"id": 1}
+        mock_requests.post.return_value = post_resp
+
+        api = GitHubAPI(token="test-token")  # noqa: S106
+        pr = GitHubPRInfo(owner="o", repo="r", pr_number=1)
+        result = api.upsert_comment(pr, "body without marker", "<!-- mark -->")
+        assert result["id"] == 1
+        # The marker should have been prepended
+        call_body = mock_requests.post.call_args[1]["json"]["body"]
+        assert "<!-- mark -->" in call_body
+
+
+# ---------------------------------------------------------------------------
+# get_pr_info_from_env — extended edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestGetPRInfoFromEnvExtended:
+    def test_invalid_repository_format(self) -> None:
+        env = {
+            "GITHUB_REPOSITORY": "invalid",
+            "GITHUB_EVENT_NAME": "pull_request",
+            "GITHUB_REF": "refs/pull/1/merge",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            assert get_pr_info_from_env() is None
+
+    def test_ref_without_pull_prefix(self) -> None:
+        env = {
+            "GITHUB_REPOSITORY": "owner/repo",
+            "GITHUB_EVENT_NAME": "pull_request",
+            "GITHUB_REF": "refs/heads/main",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            assert get_pr_info_from_env() is None
+
+    def test_ref_with_bad_pr_number(self) -> None:
+        env = {
+            "GITHUB_REPOSITORY": "owner/repo",
+            "GITHUB_EVENT_NAME": "pull_request",
+            "GITHUB_REF": "refs/pull/not-a-number/merge",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            assert get_pr_info_from_env() is None
+
+
+# ---------------------------------------------------------------------------
+# CommitInfo dataclass
+# ---------------------------------------------------------------------------
+
+
+class TestCommitInfo:
+    def test_commit_info_creation(self) -> None:
+        ci = CommitInfo(sha="abc", subject="msg", body="details")
+        assert ci.sha == "abc"
+        assert ci.subject == "msg"
+        assert ci.body == "details"

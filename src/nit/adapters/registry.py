@@ -7,6 +7,7 @@ to select the appropriate adapter(s) based on a project profile.
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 import logging
 import pkgutil
 from pathlib import Path
@@ -46,10 +47,17 @@ class AdapterRegistry:
         Scans the ``nit.adapters.unit`` subpackage for unit test adapters,
         ``nit.adapters.e2e`` for E2E test adapters, and
         ``nit.adapters.docs`` for documentation adapters.
+
+        Also discovers adapters registered via Python entry points for
+        community-contributed adapter packages.
         """
+        # Discover built-in adapters from nit package
         self._discover_test_adapters()
         self._discover_e2e_adapters()
         self._discover_doc_adapters()
+
+        # Discover external adapters via entry points
+        self._discover_entry_point_adapters()
 
     def _discover_test_adapters(self) -> None:
         """Scan ``nit.adapters.unit`` for ``TestFrameworkAdapter`` subclasses."""
@@ -159,6 +167,142 @@ class AdapterRegistry:
                         attr_name,
                         exc,
                     )
+
+    def _discover_entry_point_adapters(self) -> None:
+        """Discover adapters registered via Python entry points.
+
+        Scans three entry point groups:
+        - ``nit.adapters.unit`` for unit/integration test adapters
+        - ``nit.adapters.e2e`` for E2E test adapters
+        - ``nit.adapters.docs`` for documentation adapters
+
+        External packages can register adapters by adding entry points
+        in their ``pyproject.toml`` or ``setup.py``.
+        """
+        # Discover unit test adapters from entry points
+        try:
+            for entry_point in importlib.metadata.entry_points(group="nit.adapters.unit"):
+                self._load_entry_point_adapter(entry_point, "test")
+        except Exception as exc:
+            logger.debug("Failed to load entry points for nit.adapters.unit: %s", exc)
+
+        # Discover E2E test adapters from entry points
+        try:
+            for entry_point in importlib.metadata.entry_points(group="nit.adapters.e2e"):
+                self._load_entry_point_adapter(entry_point, "test")
+        except Exception as exc:
+            logger.debug("Failed to load entry points for nit.adapters.e2e: %s", exc)
+
+        # Discover doc adapters from entry points
+        try:
+            for entry_point in importlib.metadata.entry_points(group="nit.adapters.docs"):
+                self._load_entry_point_adapter(entry_point, "doc")
+        except Exception as exc:
+            logger.debug("Failed to load entry points for nit.adapters.docs: %s", exc)
+
+    def _load_entry_point_adapter(
+        self, entry_point: importlib.metadata.EntryPoint, adapter_type: str
+    ) -> None:
+        """Load and register an adapter from an entry point.
+
+        Args:
+            entry_point: The entry point to load.
+            adapter_type: Either ``"test"`` or ``"doc"``.
+        """
+        try:
+            # Load the adapter class from the entry point
+            adapter_class = entry_point.load()
+
+            # Verify it's a class
+            if not isinstance(adapter_class, type):
+                logger.warning(
+                    "Entry point %s does not refer to a class: %s",
+                    entry_point.name,
+                    adapter_class,
+                )
+                return
+
+            # Register based on adapter type
+            if adapter_type == "test":
+                if not issubclass(adapter_class, TestFrameworkAdapter):
+                    logger.warning(
+                        "Entry point %s does not refer to a TestFrameworkAdapter: %s",
+                        entry_point.name,
+                        adapter_class,
+                    )
+                    return
+
+                # Instantiate to get the name
+                try:
+                    test_instance = adapter_class()
+                    adapter_name = test_instance.name
+
+                    # Avoid overwriting built-in adapters
+                    if adapter_name in self._test_adapters:
+                        logger.warning(
+                            "Test adapter %s from entry point %s conflicts with existing "
+                            "adapter, skipping",
+                            adapter_name,
+                            entry_point.name,
+                        )
+                        return
+
+                    self._test_adapters[adapter_name] = adapter_class
+                    logger.info(
+                        "Registered test adapter %s from entry point %s",
+                        adapter_name,
+                        entry_point.name,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to instantiate test adapter from entry point %s: %s",
+                        entry_point.name,
+                        exc,
+                    )
+
+            elif adapter_type == "doc":
+                if not issubclass(adapter_class, DocFrameworkAdapter):
+                    logger.warning(
+                        "Entry point %s does not refer to a DocFrameworkAdapter: %s",
+                        entry_point.name,
+                        adapter_class,
+                    )
+                    return
+
+                # Instantiate to get the name
+                try:
+                    doc_instance = adapter_class()
+                    adapter_name = doc_instance.name
+
+                    # Avoid overwriting built-in adapters
+                    if adapter_name in self._doc_adapters:
+                        logger.warning(
+                            "Doc adapter %s from entry point %s conflicts with existing "
+                            "adapter, skipping",
+                            adapter_name,
+                            entry_point.name,
+                        )
+                        return
+
+                    self._doc_adapters[adapter_name] = adapter_class
+                    logger.info(
+                        "Registered doc adapter %s from entry point %s",
+                        adapter_name,
+                        entry_point.name,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to instantiate doc adapter from entry point %s: %s",
+                        entry_point.name,
+                        exc,
+                    )
+
+        except Exception as exc:
+            logger.warning(
+                "Failed to load entry point %s: %s",
+                entry_point.name,
+                exc,
+            )
 
     def get_test_adapter(self, name: str) -> TestFrameworkAdapter | None:
         """Get a test adapter by name.

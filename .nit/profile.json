@@ -1,0 +1,67 @@
+{
+  "root": "/Users/mujacic/nit",
+  "primary_language": "python",
+  "workspace_tool": "generic",
+  "is_monorepo": false,
+  "languages": [
+    {
+      "language": "python",
+      "file_count": 248,
+      "confidence": 1.0,
+      "extensions": {
+        ".py": 248
+      }
+    }
+  ],
+  "frameworks": [
+    {
+      "name": "pytest",
+      "language": "python",
+      "category": "unit_test",
+      "confidence": 0.84
+    },
+    {
+      "name": "gtest",
+      "language": "cpp",
+      "category": "unit_test",
+      "confidence": 0.7
+    },
+    {
+      "name": "junit5",
+      "language": "java",
+      "category": "unit_test",
+      "confidence": 0.7
+    },
+    {
+      "name": "playwright",
+      "language": "javascript",
+      "category": "e2e_test",
+      "confidence": 0.7
+    },
+    {
+      "name": "testify",
+      "language": "go",
+      "category": "unit_test",
+      "confidence": 0.7
+    },
+    {
+      "name": "vitest",
+      "language": "javascript",
+      "category": "unit_test",
+      "confidence": 0.7
+    },
+    {
+      "name": "xunit",
+      "language": "csharp",
+      "category": "unit_test",
+      "confidence": 0.7
+    }
+  ],
+  "packages": [
+    {
+      "name": "getnit",
+      "path": ".",
+      "dependencies": []
+    }
+  ]
+}

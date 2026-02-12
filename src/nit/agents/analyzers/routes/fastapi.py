@@ -13,6 +13,11 @@ from nit.models.route import (
     RouteType,
 )
 
+# Minimum number of parts in a decorator name to identify a method call (e.g. "app.get")
+MIN_DECORATOR_PARTS = 2
+
+VALID_HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+
 
 def discover_fastapi_routes(project_root: str | Path) -> list[RouteInfo]:
     """Discover FastAPI routes by parsing Python files for @app decorators.
@@ -62,7 +67,7 @@ def _extract_fastapi_routes_from_file(file_path: Path, root: Path) -> list[Route
                 route_infos = _extract_fastapi_routes_from_function(node, file_path, root)
                 routes.extend(route_infos)
 
-    except SyntaxError, UnicodeDecodeError:
+    except (SyntaxError, UnicodeDecodeError):
         # Skip files that can't be parsed
         pass
 
@@ -85,50 +90,64 @@ def _extract_fastapi_routes_from_function(
     return routes
 
 
-def _parse_fastapi_decorator(  # noqa: PLR0911
+def _resolve_http_method(decorator_name: str) -> HTTPMethod | None:
+    """Resolve an HTTP method from a decorator name like 'app.get'.
+
+    Returns:
+        HTTPMethod if valid, None otherwise.
+    """
+    parts = decorator_name.split(".")
+    if len(parts) < MIN_DECORATOR_PARTS:
+        return None
+
+    method_name = parts[-1].upper()
+    if method_name not in VALID_HTTP_METHODS:
+        return None
+
+    try:
+        return HTTPMethod[method_name]
+    except KeyError:
+        return None
+
+
+def _extract_method_and_path(
     decorator: ast.expr,
-    func_node: ast.FunctionDef | ast.AsyncFunctionDef,
-    file_path: Path,
-    root: Path,  # noqa: ARG001
-) -> RouteInfo | None:
-    """Parse a FastAPI HTTP method decorator."""
-    # Handle @app.get(), @app.post(), @router.get(), etc.
+) -> tuple[HTTPMethod, str] | None:
+    """Extract HTTP method and path from a FastAPI decorator.
+
+    Returns:
+        Tuple of (method, path) if valid, None otherwise.
+    """
     if not isinstance(decorator, ast.Call):
         return None
 
-    # Check if it's an HTTP method decorator
     decorator_name = _get_decorator_name(decorator.func)
     if not decorator_name:
         return None
 
-    # Extract method from decorator name (e.g., "app.get" -> "GET")
-    parts = decorator_name.split(".")
-    if len(parts) < 2:  # noqa: PLR2004
-        return None
-
-    method_name = parts[-1].upper()
-
-    # Check if it's a valid HTTP method
-    valid_methods = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
-    if method_name not in valid_methods:
-        return None
-
-    # Extract route path from first argument
-    if not decorator.args:
+    method = _resolve_http_method(decorator_name)
+    if method is None or not decorator.args:
         return None
 
     path = _extract_string_from_node(decorator.args[0])
     if not path:
         return None
 
-    # Create HTTP method
-    try:
-        method = HTTPMethod[method_name]
-    except KeyError:
+    return method, path
+
+
+def _parse_fastapi_decorator(
+    decorator: ast.expr,
+    func_node: ast.FunctionDef | ast.AsyncFunctionDef,
+    file_path: Path,
+    _root: Path,
+) -> RouteInfo | None:
+    """Parse a FastAPI HTTP method decorator."""
+    extracted = _extract_method_and_path(decorator)
+    if extracted is None:
         return None
 
-    # Determine route type
-    route_type = RouteType.API  # FastAPI is primarily for APIs
+    method, path = extracted
 
     # Extract route parameters
     params = _extract_fastapi_params(path)
@@ -144,7 +163,7 @@ def _parse_fastapi_decorator(  # noqa: PLR0911
 
     return RouteInfo(
         path=path,
-        route_type=route_type,
+        route_type=RouteType.API,
         methods=[method],
         handler=handler,
         params=params,

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from nit.adapters.coverage.base import CoverageReport
     from nit.llm.prompts.base import PromptTemplate
 
 
@@ -45,6 +46,7 @@ class RunResult:
     test_cases: list[CaseResult] = field(default_factory=list)
     raw_output: str = ""
     success: bool = False
+    coverage: CoverageReport | None = None
 
     @property
     def total(self) -> int:
@@ -115,6 +117,29 @@ class TestFrameworkAdapter(ABC):
 
         Uses tree-sitter (or equivalent) to parse the code without executing it.
         """
+
+    def get_required_packages(self) -> list[str]:
+        """Return list of required packages for this adapter.
+
+        Override this method to specify packages that must be installed
+        for the test framework to work (e.g., ``["pytest", "pytest-json-report"]``
+        for pytest).
+
+        Returns:
+            List of package names. Empty list means no packages required.
+        """
+        return []
+
+    def get_required_commands(self) -> list[str]:
+        """Return list of required commands for this adapter.
+
+        Override this method to specify commands that must be available
+        in PATH or the local environment (e.g., ``["node"]`` for Vitest).
+
+        Returns:
+            List of command names. Empty list means no commands required.
+        """
+        return []
 
 
 class DocFrameworkAdapter(ABC):

@@ -90,7 +90,7 @@ class IstanbulAdapter(CoverageAdapter):
                     coverage_tools = {"vitest", "jest", "c8", "@vitest/coverage-v8"}
                     if any(tool in all_deps for tool in coverage_tools):
                         return True
-            except json.JSONDecodeError, OSError:
+            except (json.JSONDecodeError, OSError):
                 pass
 
         # Check for existing coverage files

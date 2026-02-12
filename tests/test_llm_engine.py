@@ -18,7 +18,7 @@ from litellm.exceptions import (
     RateLimitError as LiteLLMRateLimitError,
 )
 
-from nit.llm.builtin import BuiltinLLM, RateLimitConfig, RetryConfig, _TokenBucket
+from nit.llm.builtin import BuiltinLLM, BuiltinLLMConfig, RateLimitConfig, RetryConfig, _TokenBucket
 from nit.llm.config import LLMConfig, _resolve_env_vars, load_llm_config
 from nit.llm.engine import (
     GenerationRequest,
@@ -31,6 +31,7 @@ from nit.llm.engine import (
 )
 from nit.llm.factory import create_engine
 from nit.llm.usage_callback import _SINGLETONS
+from nit.utils.platform_client import get_platform_api_key
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -177,14 +178,14 @@ def test_load_config_with_platform_section(tmp_path: Path) -> None:
         "  provider: openai\n"
         "  model: gpt-4o\n"
         "platform:\n"
-        "  url: https://api.getnit.dev\n"
+        "  url: https://platform.getnit.dev\n"
         "  api_key: nit_key_platform\n"
         "  mode: platform\n"
     )
 
     cfg = load_llm_config(tmp_path)
 
-    assert cfg.platform_url == "https://api.getnit.dev"
+    assert cfg.platform_url == "https://platform.getnit.dev"
     assert cfg.platform_api_key == "nit_key_platform"
     assert cfg.resolved_platform_mode == "platform"
     assert cfg.is_configured
@@ -198,7 +199,7 @@ def test_load_config_platform_byok_mode(tmp_path: Path) -> None:
         "  model: claude-sonnet-4-5-20250514\n"
         "  api_key: byok_key\n"
         "platform:\n"
-        "  url: https://api.getnit.dev\n"
+        "  url: https://platform.getnit.dev\n"
         "  api_key: nit_key_usage\n"
         "  mode: byok\n"
     )
@@ -236,15 +237,15 @@ def test_factory_platform_mode_routes_to_proxy(monkeypatch: pytest.MonkeyPatch) 
         model="gpt-4o",
         provider="openai",
         platform_mode="platform",
-        platform_url="https://api.getnit.dev",
+        platform_url="https://platform.getnit.dev",
         platform_api_key="nit_key_proxy",
     )
     engine = create_engine(cfg)
     assert isinstance(engine, BuiltinLLM)
-    assert engine._base_url == "https://api.getnit.dev/api/v1/llm-proxy"
+    assert engine._base_url == "https://platform.getnit.dev/api/v1/llm-proxy"
     assert engine._api_key == "nit_key_proxy"
-    assert os.environ.get("NIT_PLATFORM_URL") == "https://api.getnit.dev"
-    assert os.environ.get("NIT_PLATFORM_API_KEY") == "nit_key_proxy"
+    assert os.environ.get("NIT_PLATFORM_URL") == "https://platform.getnit.dev"
+    assert get_platform_api_key() == "nit_key_proxy"
 
 
 def test_factory_byok_mode_keeps_provider_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -256,15 +257,15 @@ def test_factory_byok_mode_keeps_provider_key(monkeypatch: pytest.MonkeyPatch) -
         provider="anthropic",
         api_key="byok_key",
         platform_mode="byok",
-        platform_url="https://api.getnit.dev",
+        platform_url="https://platform.getnit.dev",
         platform_api_key="nit_key_usage",
     )
     engine = create_engine(cfg)
     assert isinstance(engine, BuiltinLLM)
     assert engine._api_key == "byok_key"
     assert engine._base_url is None
-    assert os.environ.get("NIT_PLATFORM_URL") == "https://api.getnit.dev"
-    assert os.environ.get("NIT_PLATFORM_API_KEY") == "nit_key_usage"
+    assert os.environ.get("NIT_PLATFORM_URL") == "https://platform.getnit.dev"
+    assert get_platform_api_key() == "nit_key_usage"
 
 
 def test_factory_raises_on_missing_model() -> None:
@@ -320,7 +321,7 @@ def _mock_completion(
 
 
 async def test_builtin_generate_text() -> None:
-    engine = BuiltinLLM(model="gpt-4o", api_key="sk-test")
+    engine = BuiltinLLM(BuiltinLLMConfig(model="gpt-4o", api_key="sk-test"))
     mock_resp = _mock_completion(text="Generated test code")
 
     with patch("nit.llm.builtin.litellm.acompletion", new_callable=AsyncMock) as mock_ac:
@@ -336,7 +337,7 @@ async def test_builtin_generate_text() -> None:
 
 
 async def test_builtin_generate_returns_response() -> None:
-    engine = BuiltinLLM(model="gpt-4o", api_key="sk-test")
+    engine = BuiltinLLM(BuiltinLLMConfig(model="gpt-4o", api_key="sk-test"))
     mock_resp = _mock_completion(text="result", prompt_t=20, comp_t=10)
 
     with patch("nit.llm.builtin.litellm.acompletion", new_callable=AsyncMock) as mock_ac:
@@ -356,7 +357,7 @@ async def test_builtin_generate_returns_response() -> None:
 
 
 async def test_builtin_generate_no_context() -> None:
-    engine = BuiltinLLM(model="gpt-4o", api_key="sk-test")
+    engine = BuiltinLLM(BuiltinLLMConfig(model="gpt-4o", api_key="sk-test"))
     mock_resp = _mock_completion(text="no context")
 
     with patch("nit.llm.builtin.litellm.acompletion", new_callable=AsyncMock) as mock_ac:
@@ -370,13 +371,13 @@ async def test_builtin_generate_no_context() -> None:
 
 def test_builtin_registers_usage_callback() -> None:
     with patch("nit.llm.builtin.ensure_nit_usage_callback_registered") as mock_register:
-        BuiltinLLM(model="gpt-4o", api_key="sk-test")
+        BuiltinLLM(BuiltinLLMConfig(model="gpt-4o", api_key="sk-test"))
 
     mock_register.assert_called_once()
 
 
 async def test_builtin_generate_model_override() -> None:
-    engine = BuiltinLLM(model="gpt-4o", api_key="sk-test")
+    engine = BuiltinLLM(BuiltinLLMConfig(model="gpt-4o", api_key="sk-test"))
     mock_resp = _mock_completion(text="ok", model="gpt-4o-mini")
 
     with patch("nit.llm.builtin.litellm.acompletion", new_callable=AsyncMock) as mock_ac:
@@ -399,10 +400,12 @@ async def test_builtin_adds_metadata_and_estimated_headers(
     monkeypatch.setenv("NIT_PLATFORM_PROJECT_ID", "project-xyz")
 
     engine = BuiltinLLM(
-        model="gpt-4o",
-        provider="openai",
-        api_key="sk-test",
-        base_url="https://api.getnit.dev/api/v1/llm-proxy",
+        BuiltinLLMConfig(
+            model="gpt-4o",
+            provider="openai",
+            api_key="sk-test",
+            base_url="https://platform.getnit.dev/api/v1/llm-proxy",
+        )
     )
     mock_resp = _mock_completion(text="ok", model="gpt-4o")
 
@@ -433,9 +436,11 @@ async def test_builtin_adds_metadata_and_estimated_headers(
 
 async def test_builtin_retries_on_rate_limit() -> None:
     engine = BuiltinLLM(
-        model="gpt-4o",
-        api_key="sk-test",
-        retry=RetryConfig(max_retries=2, base_delay=0.01),
+        BuiltinLLMConfig(
+            model="gpt-4o",
+            api_key="sk-test",
+            retry=RetryConfig(max_retries=2, base_delay=0.01),
+        )
     )
     mock_resp = _mock_completion()
 
@@ -461,7 +466,7 @@ async def test_builtin_retries_on_rate_limit() -> None:
 
 
 async def test_builtin_raises_auth_error() -> None:
-    engine = BuiltinLLM(model="gpt-4o", api_key="bad-key")
+    engine = BuiltinLLM(BuiltinLLMConfig(model="gpt-4o", api_key="bad-key"))
 
     with patch("nit.llm.builtin.litellm.acompletion", new_callable=AsyncMock) as mock_ac:
         mock_ac.side_effect = LiteLLMAuthError(
@@ -475,9 +480,11 @@ async def test_builtin_raises_auth_error() -> None:
 
 async def test_builtin_exhausts_retries_raises_rate_limit() -> None:
     engine = BuiltinLLM(
-        model="gpt-4o",
-        api_key="sk-test",
-        retry=RetryConfig(max_retries=1, base_delay=0.01),
+        BuiltinLLMConfig(
+            model="gpt-4o",
+            api_key="sk-test",
+            retry=RetryConfig(max_retries=1, base_delay=0.01),
+        )
     )
 
     with patch("nit.llm.builtin.litellm.acompletion", new_callable=AsyncMock) as mock_ac:
@@ -492,9 +499,11 @@ async def test_builtin_exhausts_retries_raises_rate_limit() -> None:
 
 async def test_builtin_retries_on_connection_error() -> None:
     engine = BuiltinLLM(
-        model="gpt-4o",
-        api_key="sk-test",
-        retry=RetryConfig(max_retries=1, base_delay=0.01),
+        BuiltinLLMConfig(
+            model="gpt-4o",
+            api_key="sk-test",
+            retry=RetryConfig(max_retries=1, base_delay=0.01),
+        )
     )
     mock_resp = _mock_completion()
 
@@ -521,9 +530,11 @@ async def test_builtin_retries_on_connection_error() -> None:
 
 async def test_builtin_connection_error_exhausted() -> None:
     engine = BuiltinLLM(
-        model="gpt-4o",
-        api_key="sk-test",
-        retry=RetryConfig(max_retries=0, base_delay=0.01),
+        BuiltinLLMConfig(
+            model="gpt-4o",
+            api_key="sk-test",
+            retry=RetryConfig(max_retries=0, base_delay=0.01),
+        )
     )
 
     with patch("nit.llm.builtin.litellm.acompletion", new_callable=AsyncMock) as mock_ac:
@@ -540,7 +551,7 @@ async def test_builtin_connection_error_exhausted() -> None:
 
 
 def test_count_tokens_fallback() -> None:
-    engine = BuiltinLLM(model="gpt-4o", api_key="sk-test")
+    engine = BuiltinLLM(BuiltinLLMConfig(model="gpt-4o", api_key="sk-test"))
     with patch("nit.llm.builtin.litellm.token_counter", side_effect=Exception("no tokenizer")):
         count = engine.count_tokens("hello world")
     # Fallback: ~4 chars per token -> 11 // 4 = 2
@@ -548,7 +559,7 @@ def test_count_tokens_fallback() -> None:
 
 
 def test_count_tokens_uses_litellm() -> None:
-    engine = BuiltinLLM(model="gpt-4o", api_key="sk-test")
+    engine = BuiltinLLM(BuiltinLLMConfig(model="gpt-4o", api_key="sk-test"))
     with patch("nit.llm.builtin.litellm.token_counter", return_value=42):
         count = engine.count_tokens("some text")
     assert count == 42
@@ -559,9 +570,11 @@ def test_count_tokens_uses_litellm() -> None:
 
 def test_backoff_delay_exponential() -> None:
     engine = BuiltinLLM(
-        model="gpt-4o",
-        api_key="sk-test",
-        retry=RetryConfig(base_delay=1.0, backoff_factor=2.0, max_delay=60.0),
+        BuiltinLLMConfig(
+            model="gpt-4o",
+            api_key="sk-test",
+            retry=RetryConfig(base_delay=1.0, backoff_factor=2.0, max_delay=60.0),
+        )
     )
     assert engine._backoff_delay(0) == 1.0
     assert engine._backoff_delay(1) == 2.0
@@ -571,8 +584,10 @@ def test_backoff_delay_exponential() -> None:
 
 def test_backoff_delay_capped() -> None:
     engine = BuiltinLLM(
-        model="gpt-4o",
-        api_key="sk-test",
-        retry=RetryConfig(base_delay=1.0, backoff_factor=2.0, max_delay=5.0),
+        BuiltinLLMConfig(
+            model="gpt-4o",
+            api_key="sk-test",
+            retry=RetryConfig(base_delay=1.0, backoff_factor=2.0, max_delay=5.0),
+        )
     )
     assert engine._backoff_delay(10) == 5.0

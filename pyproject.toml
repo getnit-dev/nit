@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Open-source AI testing, documentation & quality agent"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.14"
+requires-python = ">=3.11"
 authors = [
     { name = "nit contributors" },
 ]
@@ -18,19 +18,27 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Testing",
     "Topic :: Software Development :: Quality Assurance",
 ]
 dependencies = [
-    "click>=8.1",
-    "defusedxml>=0.7",
-    "litellm>=1.0",
-    "pyyaml>=6.0",
-    "rich>=14.3.2",
-    "requests>=2.32",
-    "tree-sitter>=0.23",
-    "tree-sitter-language-pack>=0.3",
+    "click>=8.1,<9",
+    "defusedxml>=0.7,<1",
+    "litellm>=1.0,<2",
+    "pyyaml>=6.0,<7",
+    "rich>=14.3.2,<16",
+    "textual>=1.0.0,<2",
+    "requests>=2.32,<3",
+    "tree-sitter>=0.23,<1",
+    "tree-sitter-language-pack>=0.3,<1",
+    "sentence-transformers>=3.0.0,<4",
+    "httpx>=0.28.0,<1",
+    "jsonschema>=4.23.0,<5",
+    "sentry-sdk[pure_eval]>=2.19,<3",
 ]
 
 [project.optional-dependencies]
@@ -44,10 +52,22 @@ dev = [
     "pre-commit>=4.0",
     "types-PyYAML>=6.0",
     "types-requests>=2.32",
+    "types-jsonschema>=4.23.0",
+    "responses>=0.25",
+]
+docs = [
+    "mkdocs-material>=9.0",
+    "mkdocs>=1.6",
 ]
 
 [project.scripts]
 nit = "nit.cli:cli"
+
+# Entry points removed - built-in adapters are auto-discovered via package scanning.
+# External packages can still register custom adapters via:
+#   [project.entry-points."nit.adapters.unit"]
+#   [project.entry-points."nit.adapters.e2e"]
+#   [project.entry-points."nit.adapters.docs"]
 
 [project.urls]
 Homepage = "https://getnit.dev"
@@ -58,7 +78,7 @@ Issues = "https://github.com/getnit-dev/nit/issues"
 packages = ["src/nit"]
 
 [tool.ruff]
-target-version = "py314"
+target-version = "py311"
 line-length = 100
 src = ["src"]
 
@@ -101,15 +121,43 @@ select = [
     "S603",    # subprocess calls are needed for test fixtures
     "S607",    # subprocess calls are needed for test fixtures
     "PLR2004", # magic values fine in tests
+    "PLR0913", # many fixtures in test functions
     "ARG",     # unused args fine in tests (fixtures)
     "TCH003",  # stdlib imports used at runtime in fixtures
 ]
-# Git CLI wrappers: executable from shutil.which(), refs validated before use
+# Git/GitHub CLI wrappers: executable from shutil.which(), refs validated before use
 "**/utils/git.py" = ["S603"]
+"**/agents/reporters/github_pr.py" = ["S603"]
+"**/agents/reporters/github_issue.py" = ["S603"]
 "**/utils/changelog.py" = ["S603"]
+"**/utils/ci_context.py" = ["S603", "FBT001", "FBT002"]
+"**/agents/pipelines/pick.py" = ["S603", "S607", "PLC0415", "PLR0915"]
+"**/agents/analyzers/diff.py" = ["S603"]
+"**/agents/analyzers/risk.py" = ["S603"]
+"**/adapters/e2e/auth.py" = ["S603"]
+# CLI entry point: complexity from handling many user options
+"**/cli.py" = ["PLR0912", "PLR0915", "FBT001", "PLC0415", "S607"]
+# Schedule watcher: auto-detection requires multiple return paths
+"**/agents/watchers/schedule.py" = ["PLR0911"]
+# Prerequisite detection: auto-detection requires multiple return paths
+"**/utils/prerequisites.py" = ["PLR0911"]
+"**/cli_helpers.py" = ["PLR0911"]
+# Template adapters: intentionally show various patterns for learning purposes
+"src/nit/adapters/unit/template_adapter.py" = ["TC003", "SIM103", "PLC0415", "PTH123", "S110", "SIM102", "ERA001", "ARG002", "PERF401"]
+"src/nit/adapters/docs/template_adapter.py" = ["TC003", "SIM103", "PLC0415", "PTH123", "S110", "SIM102", "ERA001", "ARG002", "PERF401"]
+# Dashboard reporter: CSS class names trigger false positive S105 (password detection)
+"src/nit/agents/reporters/dashboard.py" = ["S105"]
+# Analytics collector: API design requires many parameters for comprehensive event recording
+"src/nit/memory/analytics_collector.py" = ["PLR0913", "FBT001"]
+# Sentry integration: lazy imports are intentional (zero overhead when disabled)
+"src/nit/telemetry/sentry_integration.py" = ["PLC0415"]
+# Usage callback: lazy import for optional Sentry metrics
+"src/nit/llm/usage_callback.py" = ["PLC0415"]
+# Analytics queries: event formatter naturally requires multiple return statements
+"src/nit/memory/analytics_queries.py" = ["PLR0911"]
 
 [tool.mypy]
-python_version = "3.14"
+python_version = "3.11"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
@@ -136,13 +184,62 @@ ignore_missing_imports = true
 module = "defusedxml.ElementTree"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = "sentry_sdk"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "sentry_sdk.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "nit.adapters.unit.template_adapter"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "nit.adapters.docs.template_adapter"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "nit.agents.watchers.schedule"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "tests.test_schedule_watcher"
+ignore_errors = true
+
 [tool.black]
 line-length = 100
-target-version = ["py314"]
+target-version = ["py311", "py312", "py313", "py314"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 filterwarnings = [
     "ignore:.*asyncio.iscoroutinefunction.*:DeprecationWarning:litellm.*",
+]
+markers = [
+    "integration: Integration tests (multiple components)",
+    "e2e: End-to-end tests (requires example projects)",
+    "slow: Tests that take >5s",
+]
+
+[tool.coverage.run]
+source = ["src/nit"]
+branch = true
+omit = [
+    "src/nit/tui_init.py",
+    "src/nit/adapters/unit/template_adapter.py",
+    "src/nit/adapters/docs/template_adapter.py",
+]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@abstractmethod",
 ]

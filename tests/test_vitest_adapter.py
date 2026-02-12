@@ -7,12 +7,10 @@ tree-sitter validation with sample TypeScript fixtures.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 from nit.adapters.base import (
     CaseStatus,
@@ -28,6 +26,9 @@ from nit.adapters.unit.vitest_adapter import (
     _looks_like_tsx,
     _map_status,
     _parse_vitest_json,
+    _read_vitest_config,
+    _safe_iterdir,
+    _to_float,
     _validate_typescript,
 )
 from nit.llm.prompts.vitest import VitestTemplate
@@ -565,3 +566,369 @@ class TestValidationResult:
         result = ValidationResult(valid=False, errors=["Syntax error at line 5-5"])
         assert result.valid is False
         assert len(result.errors) == 1
+
+
+class TestVitestEnvironmentPackages:
+    """Test environment package detection from vitest config."""
+
+    def test_detects_jsdom_environment(self, tmp_path: Path) -> None:
+        """Detect jsdom when environment is set to jsdom."""
+        config = tmp_path / "vitest.config.ts"
+        config.write_text("""
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    environment: 'jsdom',
+  },
+});
+""")
+        adapter = VitestAdapter()
+        packages = adapter.get_environment_packages(tmp_path)
+        assert "jsdom" in packages
+
+    def test_detects_happy_dom_environment(self, tmp_path: Path) -> None:
+        """Detect happy-dom when environment is set to happy-dom."""
+        config = tmp_path / "vitest.config.js"
+        config.write_text("""
+export default {
+  test: {
+    environment: "happy-dom",
+  },
+};
+""")
+        adapter = VitestAdapter()
+        packages = adapter.get_environment_packages(tmp_path)
+        assert "happy-dom" in packages
+
+    def test_detects_coverage_provider(self, tmp_path: Path) -> None:
+        """Detect coverage provider packages."""
+        config = tmp_path / "vitest.config.ts"
+        config.write_text("""
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    coverage: {
+      provider: 'v8',
+    },
+  },
+});
+""")
+        adapter = VitestAdapter()
+        packages = adapter.get_environment_packages(tmp_path)
+        assert "@vitest/coverage-v8" in packages
+
+    def test_no_config_returns_empty(self, tmp_path: Path) -> None:
+        """Return empty list when no config file exists."""
+        adapter = VitestAdapter()
+        packages = adapter.get_environment_packages(tmp_path)
+        assert packages == []
+
+    def test_detects_multiple_packages(self, tmp_path: Path) -> None:
+        """Detect multiple environment packages from config."""
+        config = tmp_path / "vitest.config.ts"
+        config.write_text("""
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    environment: 'jsdom',
+    coverage: {
+      provider: 'istanbul',
+    },
+  },
+});
+""")
+        adapter = VitestAdapter()
+        packages = adapter.get_environment_packages(tmp_path)
+        assert "jsdom" in packages
+        assert "@vitest/coverage-istanbul" in packages
+
+
+# ── Additional coverage: missing lines ────────────────────────────
+
+
+class TestVitestToFloat:
+    """Cover _to_float branches."""
+
+    def test_float_value(self) -> None:
+        assert _to_float(1.5) == 1.5
+
+    def test_int_value(self) -> None:
+        assert _to_float(42) == 42.0
+
+    def test_string_value(self) -> None:
+        assert _to_float("3.14") == pytest.approx(3.14)
+
+    def test_invalid_returns_zero(self) -> None:
+        assert _to_float("not a number") == 0.0
+        assert _to_float(None) == 0.0
+
+
+class TestVitestSafeIterdir:
+    """Cover _safe_iterdir branches."""
+
+    def test_existing_dir(self, tmp_path: Path) -> None:
+        (tmp_path / "file.txt").touch()
+        result = _safe_iterdir(tmp_path)
+        assert len(result) >= 1
+
+    def test_nonexistent_dir(self, tmp_path: Path) -> None:
+        result = _safe_iterdir(tmp_path / "nope")
+        assert result == []
+
+
+class TestVitestReadConfig:
+    """Cover _read_vitest_config."""
+
+    def test_reads_existing_config(self, tmp_path: Path) -> None:
+        config = tmp_path / "vitest.config.ts"
+        config.write_text("export default {}", encoding="utf-8")
+        result = _read_vitest_config(tmp_path)
+        assert result is not None
+        assert "export" in result
+
+    def test_returns_none_when_no_config(self, tmp_path: Path) -> None:
+        assert _read_vitest_config(tmp_path) is None
+
+
+class TestVitestRequiredPackagesCommands:
+    """Cover get_required_packages / get_required_commands."""
+
+    def test_required_packages(self) -> None:
+        pkgs = VitestAdapter().get_required_packages()
+        assert "vitest" in pkgs
+
+    def test_required_commands(self) -> None:
+        cmds = VitestAdapter().get_required_commands()
+        assert "node" in cmds
+        assert "npx" in cmds
+
+
+class TestVitestRunTestsMocked:
+    """Cover run_tests branches with mocked subprocess."""
+
+    @pytest.mark.asyncio
+    async def test_run_tests_timeout(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _make_files(tmp_path, ["vitest.config.ts"])
+
+        async def _fake_exec(*args: object, **kwargs: object) -> object:
+            raise TimeoutError
+
+        monkeypatch.setattr(
+            "nit.adapters.unit.vitest_adapter.asyncio.create_subprocess_exec",
+            _fake_exec,
+        )
+        result = await VitestAdapter().run_tests(tmp_path, collect_coverage=False)
+        assert result.success is False
+        assert "timed out" in result.raw_output
+
+    @pytest.mark.asyncio
+    async def test_run_tests_file_not_found(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _make_files(tmp_path, ["vitest.config.ts"])
+
+        async def _fake_exec(*args: object, **kwargs: object) -> object:
+            raise FileNotFoundError
+
+        monkeypatch.setattr(
+            "nit.adapters.unit.vitest_adapter.asyncio.create_subprocess_exec",
+            _fake_exec,
+        )
+        result = await VitestAdapter().run_tests(tmp_path, collect_coverage=False)
+        assert result.success is False
+        assert "not found" in result.raw_output
+
+    @pytest.mark.asyncio
+    async def test_run_tests_success(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _make_files(tmp_path, ["vitest.config.ts"])
+
+        json_output = json.dumps(
+            {
+                "testResults": [
+                    {
+                        "name": "test.ts",
+                        "duration": 10,
+                        "assertionResults": [
+                            {
+                                "fullName": "test > works",
+                                "status": "passed",
+                                "duration": 5,
+                                "failureMessages": [],
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate = AsyncMock(return_value=(json_output.encode(), b""))
+
+        monkeypatch.setattr(
+            "nit.adapters.unit.vitest_adapter.asyncio.create_subprocess_exec",
+            AsyncMock(return_value=mock_proc),
+        )
+        result = await VitestAdapter().run_tests(tmp_path, collect_coverage=False)
+        assert result.passed == 1
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_run_tests_with_test_files(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _make_files(tmp_path, ["vitest.config.ts"])
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate = AsyncMock(return_value=(b"{}", b""))
+
+        monkeypatch.setattr(
+            "nit.adapters.unit.vitest_adapter.asyncio.create_subprocess_exec",
+            AsyncMock(return_value=mock_proc),
+        )
+        test_file = Path("/src/math.test.ts")
+        result = await VitestAdapter().run_tests(
+            tmp_path,
+            test_files=[test_file],
+            collect_coverage=False,
+        )
+        assert isinstance(result.passed, int)
+
+    @pytest.mark.asyncio
+    async def test_run_tests_with_stderr(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _make_files(tmp_path, ["vitest.config.ts"])
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 1
+        mock_proc.communicate = AsyncMock(return_value=(b"", b"error output"))
+
+        monkeypatch.setattr(
+            "nit.adapters.unit.vitest_adapter.asyncio.create_subprocess_exec",
+            AsyncMock(return_value=mock_proc),
+        )
+        result = await VitestAdapter().run_tests(tmp_path, collect_coverage=False)
+        assert "error output" in result.raw_output
+
+
+class TestVitestJsonParsingEdgeCases:
+    """Cover more JSON parsing edge cases."""
+
+    def test_non_list_test_results(self) -> None:
+        data = json.dumps({"testResults": "not a list"})
+        result = _parse_vitest_json(data, data)
+        assert result.total == 0
+
+    def test_non_dict_suite(self) -> None:
+        data = json.dumps({"testResults": ["not a dict"]})
+        result = _parse_vitest_json(data, data)
+        assert result.total == 0
+
+    def test_non_list_assertion_results(self) -> None:
+        data = json.dumps(
+            {"testResults": [{"name": "t", "duration": 1, "assertionResults": "bad"}]}
+        )
+        result = _parse_vitest_json(data, data)
+        assert result.total == 0
+
+    def test_non_dict_assertion(self) -> None:
+        data = json.dumps(
+            {"testResults": [{"name": "t", "duration": 1, "assertionResults": ["not a dict"]}]}
+        )
+        result = _parse_vitest_json(data, data)
+        assert result.total == 1
+        # Non-dict entry coerced to empty dict, status="failed" by default
+        assert result.failed == 1
+
+    def test_error_status_mapping(self) -> None:
+        data = json.dumps(
+            {
+                "testResults": [
+                    {
+                        "name": "t",
+                        "duration": 1,
+                        "assertionResults": [
+                            {
+                                "fullName": "err",
+                                "status": "unknown_status",
+                                "duration": 0,
+                                "failureMessages": [],
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+        result = _parse_vitest_json(data, data)
+        assert result.errors == 1
+
+    def test_assertion_uses_title_when_no_fullname(self) -> None:
+        data = json.dumps(
+            {
+                "testResults": [
+                    {
+                        "name": "t",
+                        "duration": 1,
+                        "assertionResults": [
+                            {
+                                "title": "my test",
+                                "status": "passed",
+                                "duration": 1,
+                                "failureMessages": [],
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+        result = _parse_vitest_json(data, data)
+        assert result.test_cases[0].name == "my test"
+
+
+class TestVitestExtractJsonEdge:
+    """Cover edge cases for _extract_json_object."""
+
+    def test_brace_mismatch(self) -> None:
+        assert _extract_json_object("}before{") is None
+
+    def test_non_dict_json(self) -> None:
+        # Array parsed but we want dict only
+        assert _extract_json_object("[1, 2]") is None
+
+
+class TestVitestEnvironmentPackagesExtended:
+    """Cover more environment package detection branches."""
+
+    def test_ui_mode_detection(self, tmp_path: Path) -> None:
+        config = tmp_path / "vitest.config.ts"
+        config.write_text("""
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    ui: '@vitest/ui',
+  },
+});
+""")
+        adapter = VitestAdapter()
+        packages = adapter.get_environment_packages(tmp_path)
+        assert "@vitest/ui" in packages

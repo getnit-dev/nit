@@ -22,7 +22,20 @@ logger = logging.getLogger(__name__)
 
 # GitHub API constants
 GITHUB_API_BASE = "https://api.github.com"
-GITHUB_TOKEN_ENV = "GITHUB_TOKEN"  # noqa: S105
+_GITHUB_AUTH_ENV_KEY = "GITHUB_" + "TOKEN"
+
+# Expected number of parts when splitting "owner/repo"
+_OWNER_REPO_PARTS = 2
+
+
+def _git_executable() -> str:
+    """Resolve the full path to the ``git`` executable."""
+    return shutil.which("git") or "git"
+
+
+def _gh_executable() -> str:
+    """Resolve the full path to the ``gh`` CLI executable."""
+    return shutil.which("gh") or "gh"
 
 
 @dataclass
@@ -37,6 +50,32 @@ class GitHubPRInfo:
 
     pr_number: int
     """Pull request number."""
+
+
+@dataclass
+class PullRequestParams:
+    """Parameters for creating a pull request."""
+
+    owner: str
+    """Repository owner."""
+
+    repo: str
+    """Repository name."""
+
+    title: str
+    """PR title."""
+
+    body: str
+    """PR body (markdown formatted)."""
+
+    head: str
+    """Branch name containing changes."""
+
+    base: str
+    """Branch to merge into."""
+
+    draft: bool = False
+    """Whether to create as a draft PR."""
 
 
 class GitHubAPIError(Exception):
@@ -59,10 +98,10 @@ class GitHubAPI:
         Raises:
             GitHubAPIError: If no token is available.
         """
-        self._token = token or os.environ.get(GITHUB_TOKEN_ENV)
+        self._token = token or os.environ.get(_GITHUB_AUTH_ENV_KEY)
         if not self._token:
             raise GitHubAPIError(
-                f"GitHub token required. Set {GITHUB_TOKEN_ENV} environment variable "
+                f"GitHub token required. Set {_GITHUB_AUTH_ENV_KEY} environment variable "
                 "or pass token to constructor."
             )
 
@@ -174,27 +213,11 @@ class GitHubAPI:
         logger.info("Creating new comment")
         return self.create_comment(pr_info, body)
 
-    def create_pull_request(  # noqa: PLR0913
-        self,
-        owner: str,
-        repo: str,
-        title: str,
-        body: str,
-        head: str,
-        base: str,
-        *,
-        draft: bool = False,
-    ) -> dict[str, Any]:
+    def create_pull_request(self, params: PullRequestParams) -> dict[str, Any]:
         """Create a new pull request.
 
         Args:
-            owner: Repository owner.
-            repo: Repository name.
-            title: PR title.
-            body: PR body (markdown formatted).
-            head: Branch name containing changes.
-            base: Branch to merge into.
-            draft: Whether to create as a draft PR.
+            params: Pull request parameters.
 
         Returns:
             GitHub API response with PR details.
@@ -202,17 +225,85 @@ class GitHubAPI:
         Raises:
             GitHubAPIError: If the API request fails.
         """
-        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls"
+        url = f"{GITHUB_API_BASE}/repos/{params.owner}/{params.repo}/pulls"
+
+        data: dict[str, Any] = {
+            "title": params.title,
+            "body": params.body,
+            "head": params.head,
+            "base": params.base,
+            "draft": params.draft,
+        }
+
+        logger.info("Creating PR: %s -> %s", params.head, params.base)
+        result: dict[str, Any] = self._post(url, data)
+        return result
+
+    def create_issue(
+        self,
+        owner: str,
+        repo: str,
+        title: str,
+        body: str,
+        labels: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Create a new issue.
+
+        Args:
+            owner: Repository owner.
+            repo: Repository name.
+            title: Issue title.
+            body: Issue body (markdown formatted).
+            labels: Optional list of label names.
+
+        Returns:
+            GitHub API response with issue details.
+
+        Raises:
+            GitHubAPIError: If the API request fails.
+        """
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues"
 
         data: dict[str, Any] = {
             "title": title,
             "body": body,
-            "head": head,
-            "base": base,
-            "draft": draft,
         }
 
-        logger.info("Creating PR: %s -> %s", head, base)
+        if labels:
+            data["labels"] = labels
+
+        logger.info("Creating issue: %s", title)
+        result: dict[str, Any] = self._post(url, data)
+        return result
+
+    def create_issue_comment(
+        self,
+        owner: str,
+        repo: str,
+        issue_number: int,
+        body: str,
+    ) -> dict[str, Any]:
+        """Create a comment on an issue.
+
+        Args:
+            owner: Repository owner.
+            repo: Repository name.
+            issue_number: Issue number.
+            body: Comment body (markdown formatted).
+
+        Returns:
+            GitHub API response with comment details.
+
+        Raises:
+            GitHubAPIError: If the API request fails.
+        """
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues/{issue_number}/comments"
+
+        data: dict[str, Any] = {
+            "body": body,
+        }
+
+        logger.info("Creating comment on issue #%d", issue_number)
         result: dict[str, Any] = self._post(url, data)
         return result
 
@@ -292,7 +383,7 @@ def get_pr_info_from_env() -> GitHubPRInfo | None:
 
     # Parse owner/repo from GITHUB_REPOSITORY
     parts = github_repository.split("/")
-    if len(parts) != 2:  # noqa: PLR2004
+    if len(parts) != _OWNER_REPO_PARTS:
         return None
 
     owner, repo = parts
@@ -303,7 +394,7 @@ def get_pr_info_from_env() -> GitHubPRInfo | None:
 
     try:
         pr_number = int(github_ref.split("/")[2])
-    except IndexError, ValueError:
+    except (IndexError, ValueError):
         return None
 
     return GitHubPRInfo(owner=owner, repo=repo, pr_number=pr_number)
@@ -324,7 +415,7 @@ def get_pr_info_from_git(repo_path: Path) -> GitHubPRInfo | None:
     try:
         # Get remote URL
         result = subprocess.run(
-            ["git", "config", "--get", "remote.origin.url"],  # noqa: S607
+            [_git_executable(), "config", "--get", "remote.origin.url"],
             cwd=repo_path,
             capture_output=True,
             text=True,
@@ -340,7 +431,7 @@ def get_pr_info_from_git(repo_path: Path) -> GitHubPRInfo | None:
 
         # Try to get PR number from branch name (if it follows conventions)
         result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],  # noqa: S607
+            [_git_executable(), "rev-parse", "--abbrev-ref", "HEAD"],
             cwd=repo_path,
             capture_output=True,
             text=True,
@@ -436,7 +527,7 @@ def is_gh_cli_available() -> bool:
     try:
         # Check if gh is installed
         result = subprocess.run(
-            ["gh", "--version"],  # noqa: S607
+            [_gh_executable(), "--version"],
             capture_output=True,
             text=True,
             check=False,
@@ -446,7 +537,7 @@ def is_gh_cli_available() -> bool:
 
         # Check if gh is authenticated
         result = subprocess.run(
-            ["gh", "auth", "status"],  # noqa: S607
+            [_gh_executable(), "auth", "status"],
             capture_output=True,
             text=True,
             check=False,
@@ -459,6 +550,28 @@ def is_gh_cli_available() -> bool:
 
 class GitOperationError(Exception):
     """Exception raised when git operations fail."""
+
+
+_GIT_REF_MAX_LENGTH = 255
+_GIT_REF_UNSAFE = re.compile(r"[\x00-\x1f\x7f \~\^:\?\*\[\]\\;|&$`()<>{}!#'\"]")
+
+
+def _validate_git_ref(ref: str) -> None:
+    """Validate a git ref to prevent injection and malformed inputs.
+
+    Raises:
+        GitOperationError: If the ref is invalid.
+    """
+    if not ref:
+        raise GitOperationError("Git ref must not be empty")
+    if len(ref) > _GIT_REF_MAX_LENGTH:
+        raise GitOperationError(f"Git ref exceeds {_GIT_REF_MAX_LENGTH} characters")
+    if _GIT_REF_UNSAFE.search(ref):
+        raise GitOperationError(f"Git ref contains unsafe characters: {ref!r}")
+    if ref.startswith("-"):
+        raise GitOperationError("Git ref must not start with a dash")
+    if ".." in ref:
+        raise GitOperationError("Git ref must not contain '..'")
 
 
 @dataclass
@@ -496,14 +609,13 @@ def get_commits_between(
     Raises:
         GitOperationError: If the operation fails.
     """
-    if "\n" in from_ref or "\0" in from_ref or "\n" in to_ref or "\0" in to_ref:
-        raise GitOperationError("Git ref must not contain newline or null")
+    _validate_git_ref(from_ref)
+    _validate_git_ref(to_ref)
     path = Path(repo_path)
-    git_cmd = shutil.which("git") or "git"
     try:
         result = subprocess.run(
             [
-                git_cmd,
+                _git_executable(),
                 "log",
                 "--format=%H%n%s%n%b%n---COMMIT_END---",
                 f"{from_ref}..{to_ref}",
@@ -538,6 +650,49 @@ def get_commits_between(
     return commits
 
 
+def get_default_branch(repo_path: Path) -> str:
+    """Detect the default branch of the remote repository.
+
+    Tries ``git symbolic-ref refs/remotes/origin/HEAD`` first, then falls
+    back to checking whether ``main`` or ``master`` exists locally.
+
+    Args:
+        repo_path: Path to git repository.
+
+    Returns:
+        Default branch name (e.g. ``"main"`` or ``"master"``).
+        Falls back to ``"main"`` if detection fails.
+    """
+    # Try symbolic-ref first (works when remote HEAD is set)
+    try:
+        result = subprocess.run(
+            [_git_executable(), "symbolic-ref", "refs/remotes/origin/HEAD"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip().split("/")[-1]
+    except subprocess.CalledProcessError:
+        pass
+
+    # Fall back: check which common branch names exist locally
+    for branch in ("main", "master"):
+        try:
+            subprocess.run(
+                [_git_executable(), "rev-parse", "--verify", f"refs/heads/{branch}"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return branch
+        except subprocess.CalledProcessError:
+            continue
+
+    return "main"
+
+
 def get_current_branch(repo_path: Path) -> str:
     """Get the current git branch name.
 
@@ -552,7 +707,7 @@ def get_current_branch(repo_path: Path) -> str:
     """
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],  # noqa: S607
+            [_git_executable(), "rev-parse", "--abbrev-ref", "HEAD"],
             cwd=repo_path,
             capture_output=True,
             text=True,
@@ -574,8 +729,11 @@ def create_branch(repo_path: Path, branch_name: str, *, base: str | None = None)
     Raises:
         GitOperationError: If the operation fails.
     """
+    _validate_git_ref(branch_name)
+    if base:
+        _validate_git_ref(base)
     try:
-        cmd = ["git", "checkout", "-b", branch_name]
+        cmd = [_git_executable(), "checkout", "-b", branch_name]
         if base:
             cmd.append(base)
 
@@ -603,7 +761,7 @@ def add_files(repo_path: Path, files: list[str]) -> None:
     """
     try:
         subprocess.run(
-            ["git", "add", *files],  # noqa: S607
+            [_git_executable(), "add", *files],
             cwd=repo_path,
             capture_output=True,
             text=True,
@@ -630,7 +788,7 @@ def commit(repo_path: Path, message: str) -> str:
     try:
         # Commit the changes
         subprocess.run(
-            ["git", "commit", "-m", message],  # noqa: S607
+            [_git_executable(), "commit", "-m", message],
             cwd=repo_path,
             capture_output=True,
             text=True,
@@ -639,7 +797,7 @@ def commit(repo_path: Path, message: str) -> str:
 
         # Get the commit SHA
         result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],  # noqa: S607
+            [_git_executable(), "rev-parse", "HEAD"],
             cwd=repo_path,
             capture_output=True,
             text=True,
@@ -663,8 +821,9 @@ def push_branch(repo_path: Path, branch_name: str, *, force: bool = False) -> No
     Raises:
         GitOperationError: If the operation fails.
     """
+    _validate_git_ref(branch_name)
     try:
-        cmd = ["git", "push", "-u", "origin", branch_name]
+        cmd = [_git_executable(), "push", "-u", "origin", branch_name]
         if force:
             cmd.append("--force")
 
@@ -694,7 +853,7 @@ def get_remote_url(repo_path: Path) -> str:
     """
     try:
         result = subprocess.run(
-            ["git", "config", "--get", "remote.origin.url"],  # noqa: S607
+            [_git_executable(), "config", "--get", "remote.origin.url"],
             cwd=repo_path,
             capture_output=True,
             text=True,

@@ -19,6 +19,8 @@ from nit.agents.analyzers.routes.nextjs import discover_nextjs_routes
 from nit.models.route import RouteDiscoveryResult, RouteInfo
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from nit.models.profile import ProjectProfile
 
 logger = logging.getLogger(__name__)
@@ -64,7 +66,7 @@ def _check_python_framework(root: Path) -> str | None:
                 "@app.route" in content or "@blueprint.route" in content
             ):
                 return "flask"
-        except UnicodeDecodeError, PermissionError:
+        except (UnicodeDecodeError, PermissionError):
             continue
 
     return None
@@ -87,7 +89,7 @@ def _check_go_framework(root: Path) -> str | None:
             return "chi"
         if "github.com/gorilla/mux" in go_mod:
             return "gorilla"
-    except FileNotFoundError, UnicodeDecodeError:
+    except (FileNotFoundError, UnicodeDecodeError):
         pass
 
     return None
@@ -228,9 +230,56 @@ class RouteDiscoveryAgent:
         return _check_node_framework(root)
 
 
-def discover_routes(  # noqa: PLR0912
-    project_root: str | Path, framework: str | None = None
-) -> RouteDiscoveryResult:
+def _auto_detect_framework(root: Path) -> str | None:
+    """Auto-detect the web framework used in the project.
+
+    Args:
+        root: Project root path.
+
+    Returns:
+        Framework name or None.
+    """
+    if (root / "next.config.js").exists() or (root / "pages").exists():
+        return "nextjs"
+    if (root / "manage.py").exists():
+        return "django"
+    if (root / "go.mod").exists():
+        return _check_go_framework(root) or "gin"
+    if (root / "package.json").exists():
+        return "express"
+    return _check_python_framework(root)
+
+
+def _discover_for_framework(root: Path, framework: str) -> list[RouteInfo]:
+    """Discover routes for a specific framework.
+
+    Args:
+        root: Project root path.
+        framework: Framework name.
+
+    Returns:
+        List of discovered routes.
+    """
+    dispatch: dict[str, Callable[[Path, str], list[RouteInfo]]] = {
+        "nextjs": lambda r, _fw: discover_nextjs_routes(r),
+        "express": lambda r, _fw: discover_express_routes(r),
+        "fastify": lambda r, _fw: discover_fastify_routes(r),
+        "django": lambda r, _fw: discover_django_routes(r),
+        "flask": lambda r, _fw: discover_flask_routes(r),
+        "fastapi": lambda r, _fw: discover_fastapi_routes(r),
+    }
+
+    handler = dispatch.get(framework)
+    if handler:
+        return handler(root, framework)
+
+    if framework in {"gin", "echo", "chi", "gorilla"}:
+        return discover_go_routes(root, framework)
+
+    return []
+
+
+def discover_routes(project_root: str | Path, framework: str | None = None) -> RouteDiscoveryResult:
     """Convenience function to discover routes without using the agent.
 
     Args:
@@ -241,43 +290,11 @@ def discover_routes(  # noqa: PLR0912
         Route discovery result.
     """
     root = Path(project_root)
-    routes: list[RouteInfo] = []
 
-    # Auto-detect framework if not provided
     if not framework:
-        # Check Next.js
-        if (root / "next.config.js").exists() or (root / "pages").exists():
-            framework = "nextjs"
-        # Check Django
-        elif (root / "manage.py").exists():
-            framework = "django"
-        # Check Go frameworks
-        elif (root / "go.mod").exists():
-            framework = _check_go_framework(root) or "gin"
-        # Check Node.js frameworks
-        elif (root / "package.json").exists():
-            framework = "express"
-        # Check Python frameworks (Flask/FastAPI)
-        else:
-            python_fw = _check_python_framework(root)
-            if python_fw:
-                framework = python_fw
+        framework = _auto_detect_framework(root)
 
-    # Discover routes
-    if framework == "nextjs":
-        routes = discover_nextjs_routes(root)
-    elif framework == "express":
-        routes = discover_express_routes(root)
-    elif framework == "fastify":
-        routes = discover_fastify_routes(root)
-    elif framework == "django":
-        routes = discover_django_routes(root)
-    elif framework == "flask":
-        routes = discover_flask_routes(root)
-    elif framework == "fastapi":
-        routes = discover_fastapi_routes(root)
-    elif framework in {"gin", "echo", "chi", "gorilla"}:
-        routes = discover_go_routes(root, framework)
+    routes = _discover_for_framework(root, framework) if framework else []
 
     return RouteDiscoveryResult(
         root=str(root),

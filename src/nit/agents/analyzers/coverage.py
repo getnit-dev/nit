@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -309,16 +310,38 @@ class CoverageAnalyzer(BaseAgent):
         Returns:
             CoverageGapReport with all identified gaps.
         """
+        # Directories to exclude from analysis
+        exclude_dirs = {
+            "node_modules",
+            ".venv",
+            "venv",
+            ".git",
+            "build",
+            "dist",
+            "__pycache__",
+            ".pytest_cache",
+            "coverage",
+            ".coverage",
+            "site-packages",
+        }
+
         gap_report = CoverageGapReport(
             overall_coverage=coverage_report.overall_line_coverage,
             target_coverage=target_coverage,
         )
 
         # Task 1.19.2: Identify untested files (0% coverage)
-        gap_report.untested_files = coverage_report.get_uncovered_files()
+        all_untested = coverage_report.get_uncovered_files()
+        gap_report.untested_files = [
+            f for f in all_untested if not any(excluded in f for excluded in exclude_dirs)
+        ]
 
         # Task 1.19.2: Identify undertested functions
         for file_path, file_coverage in coverage_report.files.items():
+            # Skip files in excluded directories
+            if any(excluded in file_path for excluded in exclude_dirs):
+                continue
+
             function_gaps = self._analyze_file_gaps(file_path, file_coverage)
             gap_report.function_gaps.extend(function_gaps)
 
@@ -516,12 +539,30 @@ class CoverageAnalyzer(BaseAgent):
         """
         stale_tests: list[StaleTest] = []
 
+        # Directories to exclude from scanning
+        exclude_dirs = {
+            "node_modules",
+            ".venv",
+            "venv",
+            ".git",
+            "build",
+            "dist",
+            "__pycache__",
+            ".pytest_cache",
+            "coverage",
+            ".coverage",
+        }
+
         # Find all test files in the project
         test_patterns = ["**/test_*.py", "**/*_test.py", "**/*.test.ts", "**/*.spec.ts"]
         test_files: list[Path] = []
 
         for pattern in test_patterns:
-            test_files.extend(self._root.glob(pattern))
+            for file in self._root.glob(pattern):
+                # Skip files in excluded directories
+                if any(excluded in file.parts for excluded in exclude_dirs):
+                    continue
+                test_files.append(file)
 
         # Check each test file for imports that don't resolve
         for test_file in test_files:
@@ -561,13 +602,41 @@ class CoverageAnalyzer(BaseAgent):
             for pattern in import_patterns:
                 for match in re.finditer(pattern, content, re.MULTILINE):
                     module = match.group(1)
-                    if not self._module_exists(module, coverage_report):
+                    if self._is_project_module(module) and not self._module_exists(
+                        module, coverage_report
+                    ):
                         missing.append(module)
 
         except Exception as exc:
             logger.debug("Failed to check imports in %s: %s", test_file, exc)
 
         return missing
+
+    def _is_project_module(self, module: str) -> bool:
+        """Check if a module appears to be project-local (not stdlib/third-party).
+
+        A module is considered project-local when its top-level package exists
+        as a directory or ``.py`` file under the project root (or ``src/``).
+        Standard-library modules are always excluded.
+
+        Args:
+            module: Dotted module name (e.g., ``nit.cli``, ``pathlib``).
+
+        Returns:
+            True if the module likely belongs to this project.
+        """
+        top_level = module.split(".", maxsplit=1)[0]
+
+        # Standard library is never project-local
+        if top_level in sys.stdlib_module_names:
+            return False
+
+        # Check if a matching package dir or single-file module lives in the project
+        for base in (self._root, self._root / "src"):
+            if (base / top_level).is_dir() or (base / f"{top_level}.py").is_file():
+                return True
+
+        return False
 
     def _module_exists(self, module: str, coverage_report: CoverageReport) -> bool:
         """Check if a module exists in the current source code.

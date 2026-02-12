@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -21,7 +21,7 @@ DEFAULT_MEMORY_DIR = ".nit/memory"
 T = TypeVar("T")
 
 
-class MemoryStore[T]:
+class MemoryStore(Generic[T]):
     """Generic JSON-based storage for memory data.
 
     Stores and retrieves JSON-serializable data in `.nit/memory/` directory.

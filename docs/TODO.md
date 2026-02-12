@@ -177,13 +177,13 @@
 - [x] **1.22.1** Implement `nit init` interactive wizard: detect stack → present findings → ask LLM config (provider, model, API key) → write `.nit.yml` (basic version done, interactive LLM config pending)
 - [x] **1.22.2** Implement `.nit.yml` config parser (`config.py`): parse YAML with env var substitution (`${VAR_NAME}`), validation, defaults, per-package overrides
 - [x] **1.22.3** Implement `nit scan` command: run detectors → display results → update profile
-- [x] **1.22.4** Implement `nit generate` command: run analyzers → create build tasks → run UnitBuilder → write test files → report summary (skeleton done, full implementation pending)
+- [x] **1.22.4** Implement `nit generate` command: run analyzers → create build tasks → run UnitBuilder → write test files → report summary
 - [x] **1.22.5** Implement `nit generate --type unit` filter and `nit generate --file <path>` targeting
 - [x] **1.22.6** Implement `nit generate --coverage-target <n>` mode: keep generating until target percentage reached
-- [x] **1.22.7** Implement `nit run` command: run full test suite via detected adapter(s), display results with coverage (skeleton donx§e, full implementation pending)
+- [x] **1.22.7** Implement `nit run` command: run full test suite via detected adapter(s), display results with coverage
 - [x] **1.22.8** Implement `CLIReporter` (`agents/reporters/terminal.py`): rich terminal output with colors, progress bars, test summaries, coverage tables
-- [x] **1.22.9** Add `nit hunt` command: alias for generate with full pipeline (scan → analyze → generate → run → debug → report)
-- [x] **1.22.10** Add `nit pick` command: alias for scan
+- [x] **1.22.9** Add `nit pick` command: alias for generate with full pipeline (scan → analyze → generate → run → debug → report)
+- [x] **1.22.10** Remove `nit pick` scan alias (pick is now the full pipeline command)
 
 ### 1.23 First Release (Week 4) `[P with 1.22]`
 
@@ -279,7 +279,7 @@
 - [x] **2.10.1** Implement `GitHubPRReporter` (`agents/reporters/github_pr.py`): create PRs with generated/fixed tests on a new branch
 - [x] **2.10.2** Implement branch creation and commit workflow: create `nit/generated-tests-<hash>` branch, commit test files, push, open PR
 - [x] **2.10.3** Generate descriptive PR body: list generated tests, coverage improvement, bugs found, link to relevant source files
-- [x] **2.10.4** Implement `nit hunt --pr` command: full pipeline ending with PR creation
+- [x] **2.10.4** Implement `nit pick --pr` command: full pipeline ending with PR creation
 - [x] **2.10.5** Test GitHubPRReporter with mocked GitHub API
 
 ### 2.11 Integration Test Generation (Week 8) `[P with 2.10]`
@@ -360,52 +360,52 @@
 
 ### 3.9 Debugger Agents (Week 13)
 
-- [ ] **3.9.1** Implement `BugAnalyzer` (`agents/analyzers/bug.py`): during test generation/execution, detect actual code bugs (not test bugs) — e.g., NaN returns, null dereference, uncaught exceptions
-- [ ] **3.9.2** Implement `BugVerifier` (`agents/debuggers/verifier.py`): take suspected bug → create minimal reproduction test case → confirm it's real by running
-- [ ] **3.9.3** Implement `RootCauseAnalyzer` (`agents/debuggers/root_cause.py`): use tree-sitter code analysis + LLM to trace bug to root cause (data flow analysis, missing validation, etc.)
-- [ ] **3.9.4** Create bug analysis prompt template (`llm/prompts/bug_analysis.py`)
-- [ ] **3.9.5** Implement `FixGenerator` (`agents/debuggers/fix_gen.py`): generate a code fix for the confirmed bug, output as a patch
-- [ ] **3.9.6** Create fix generation prompt template (`llm/prompts/fix_generation.py`)
-- [ ] **3.9.7** Implement `FixVerifier` (`agents/debuggers/fix_verify.py`): apply fix → run existing tests + new regression test → confirm no regressions
-- [ ] **3.9.8** Wire debugger pipeline: BugAnalyzer → BugVerifier → RootCauseAnalyzer → FixGenerator → FixVerifier → Reporter
-- [ ] **3.9.9** Implement `nit hunt` command: full pipeline (scan → analyze → generate → run → debug → report)
-- [ ] **3.9.10** Implement `nit hunt --fix` flag: also generate and apply fixes for found bugs
-- [ ] **3.9.11** Write tests for each debugger agent with sample buggy code
+- [x] **3.9.1** Implement `BugAnalyzer` (`agents/analyzers/bug.py`): during test generation/execution, detect actual code bugs (not test bugs) — e.g., NaN returns, null dereference, uncaught exceptions
+- [x] **3.9.2** Implement `BugVerifier` (`agents/debuggers/verifier.py`): take suspected bug → create minimal reproduction test case → confirm it's real by running
+- [x] **3.9.3** Implement `RootCauseAnalyzer` (`agents/debuggers/root_cause.py`): use tree-sitter code analysis + LLM to trace bug to root cause (data flow analysis, missing validation, etc.)
+- [x] **3.9.4** Create bug analysis prompt template (`llm/prompts/bug_analysis.py`)
+- [x] **3.9.5** Implement `FixGenerator` (`agents/debuggers/fix_gen.py`): generate a code fix for the confirmed bug, output as a patch
+- [x] **3.9.6** Create fix generation prompt template (`llm/prompts/fix_generation.py`)
+- [x] **3.9.7** Implement `FixVerifier` (`agents/debuggers/fix_verify.py`): apply fix → run existing tests + new regression test → confirm no regressions
+- [x] **3.9.8** Wire debugger pipeline: BugAnalyzer → BugVerifier → RootCauseAnalyzer → FixGenerator → FixVerifier → Reporter
+- [x] **3.9.9** Implement `nit pick` command: full pipeline (scan → analyze → generate → run → debug → report)
+- [x] **3.9.10** Implement `nit pick --fix` flag: also generate and apply fixes for found bugs
+- [x] **3.9.11** Write tests for each debugger agent with sample buggy code
 
 ### 3.10 GitHubIssueReporter (Week 13) `[P with 3.9]`
 
-- [ ] **3.10.1** Implement `GitHubIssueReporter` (`agents/reporters/github_issue.py`): create GitHub Issues for confirmed bugs
-- [ ] **3.10.2** Format issue body: bug description, reproduction steps, minimal test case, root cause analysis, suggested fix, affected file/function
-- [ ] **3.10.3** Link issues to PRs when fix is generated
-- [ ] **3.10.4** Test GitHubIssueReporter with mocked GitHub API
+- [x] **3.10.1** Implement `GitHubIssueReporter` (`agents/reporters/github_issue.py`): create GitHub Issues for confirmed bugs
+- [x] **3.10.2** Format issue body: bug description, reproduction steps, minimal test case, root cause analysis, suggested fix, affected file/function
+- [x] **3.10.3** Link issues to PRs when fix is generated
+- [x] **3.10.4** Test GitHubIssueReporter with mocked GitHub API
 
 ### 3.11 DriftWatcher (Week 14)
 
-- [ ] **3.11.1** Implement `DriftWatcher` (`agents/watchers/drift.py`): load drift test definitions from `.nit/drift-tests.yml`, execute tests, compare against baselines
-- [ ] **3.11.2** Implement drift test YAML spec parser: support `semantic`, `exact`, `regex`, `schema` comparison types
-- [ ] **3.11.3** Implement test endpoint execution: `function` type (import and call Python/JS function), `http` type (send HTTP request), `cli` type (run command)
-- [ ] **3.11.4** Implement `DriftComparator` semantic comparison: use sentence-transformers for embedding-based cosine similarity (local, no API needed)
-- [ ] **3.11.5** Implement exact match, regex match, and JSON schema validation comparison strategies
-- [ ] **3.11.6** Implement baseline management (`memory/drift_baselines.py`): store/update baseline outputs and embeddings
-- [ ] **3.11.7** Implement `nit drift` command: run all drift tests, report results
-- [ ] **3.11.8** Implement `nit drift --baseline` command: update baselines to current outputs
-- [ ] **3.11.9** Implement `nit drift --watch` command: continuous monitoring on schedule
-- [ ] **3.11.10** Write tests for DriftWatcher with mock LLM endpoints
+- [x] **3.11.1** Implement `DriftWatcher` (`agents/watchers/drift.py`): load drift test definitions from `.nit/drift-tests.yml`, execute tests, compare against baselines
+- [x] **3.11.2** Implement drift test YAML spec parser: support `semantic`, `exact`, `regex`, `schema` comparison types
+- [x] **3.11.3** Implement test endpoint execution: `function` type (import and call Python/JS function), `http` type (send HTTP request), `cli` type (run command)
+- [x] **3.11.4** Implement `DriftComparator` semantic comparison: use sentence-transformers for embedding-based cosine similarity (local, no API needed)
+- [x] **3.11.5** Implement exact match, regex match, and JSON schema validation comparison strategies
+- [x] **3.11.6** Implement baseline management (`memory/drift_baselines.py`): store/update baseline outputs and embeddings
+- [x] **3.11.7** Implement `nit drift` command: run all drift tests, report results
+- [x] **3.11.8** Implement `nit drift --baseline` command: update baselines to current outputs
+- [x] **3.11.9** Implement `nit drift --watch` command: continuous monitoring on schedule
+- [x] **3.11.10** Write tests for DriftWatcher with mock LLM endpoints
 
 ### 3.12 Prompt Optimization (Week 14) `[P with 3.11]`
 
-- [ ] **3.12.1** Implement prompt analysis module: token counting, redundancy detection, instruction clarity scoring
-- [ ] **3.12.2** Implement optimization suggestions: reduced token usage, clearer output format specs, better few-shot examples, temperature/parameter recommendations
-- [ ] **3.12.3** Create drift analysis prompt template (`llm/prompts/drift_analysis.py`)
-- [ ] **3.12.4** Integrate prompt optimization into drift alert output: when drift detected, include optimization suggestions in the report
-- [ ] **3.12.5** Write tests for prompt optimization module
+- [x] **3.12.1** Implement prompt analysis module: token counting, redundancy detection, instruction clarity scoring
+- [x] **3.12.2** Implement optimization suggestions: reduced token usage, clearer output format specs, better few-shot examples, temperature/parameter recommendations
+- [x] **3.12.3** Create drift analysis prompt template (`llm/prompts/drift_analysis.py`)
+- [x] **3.12.4** Integrate prompt optimization into drift alert output: when drift detected, include optimization suggestions in the report
+- [x] **3.12.5** Write tests for prompt optimization module
 
 ### 3.13 LLM Usage Detector (Week 14) `[P with 3.11]`
 
-- [ ] **3.13.1** Implement `LLMUsageDetector` (`agents/detectors/llm_usage.py`): scan for OpenAI/Anthropic/Ollama SDK imports, HTTP calls to LLM endpoints, prompt template files
-- [ ] **3.13.2** Map detected LLM usage to drift test candidates: suggest which endpoints/functions should have drift tests
-- [ ] **3.13.3** Auto-generate drift test skeleton from detected LLM integrations
-- [ ] **3.13.4** Write tests for LLMUsageDetector
+- [x] **3.13.1** Implement `LLMUsageDetector` (`agents/detectors/llm_usage.py`): scan for OpenAI/Anthropic/Ollama SDK imports, HTTP calls to LLM endpoints, prompt template files
+- [x] **3.13.2** Map detected LLM usage to drift test candidates: suggest which endpoints/functions should have drift tests
+- [x] **3.13.3** Auto-generate drift test skeleton from detected LLM integrations
+- [x] **3.13.4** Write tests for LLMUsageDetector
 
 ---
 
@@ -413,37 +413,37 @@
 
 ### 4.1 DocBuilder — Core (Weeks 15–16)
 
-- [ ] **4.1.1** Implement `DocBuilder` agent (`agents/builders/docs.py`): receives changed files → detects doc framework → generates/updates documentation
-- [ ] **4.1.2** Implement diff-based doc detection: compare current code AST against last documented state (stored in memory), identify new functions, modified signatures, removed endpoints
-- [ ] **4.1.3** Create doc generation prompt template (`llm/prompts/doc_generation.py`): generate docstrings/comments in target framework format
-- [ ] **4.1.4** Implement `nit docs` command: run DocBuilder for all packages
-- [ ] **4.1.5** Implement `nit docs --check` command: report outdated docs without making changes
+- [x] **4.1.1** Implement `DocBuilder` agent (`agents/builders/docs.py`): receives changed files → detects doc framework → generates/updates documentation
+- [x] **4.1.2** Implement diff-based doc detection: compare current code AST against last documented state (stored in memory), identify new functions, modified signatures, removed endpoints
+- [x] **4.1.3** Create doc generation prompt template (`llm/prompts/doc_generation.py`): generate docstrings/comments in target framework format
+- [x] **4.1.4** Implement `nit docs` command: run DocBuilder for all packages
+- [x] **4.1.5** Implement `nit docs --check` command: report outdated docs without making changes
 
 ### 4.2 TypeDoc Adapter (Weeks 15–16) `[P with 4.1]`
 
-- [ ] **4.2.1** Implement `TypeDocAdapter` (`adapters/docs/typedoc.py`): detection (`typedoc.json`, `typedoc` dep), doc generation (TSDoc comments in source), doc build (`npx typedoc`)
-- [ ] **4.2.2** Generate TSDoc comments for undocumented exported functions/classes/interfaces
-- [ ] **4.2.3** Write tests for TypeDocAdapter
+- [x] **4.2.1** Implement `TypeDocAdapter` (`adapters/docs/typedoc_adapter.py`): detection (`typedoc.json`, `typedoc` dep), doc generation (TSDoc comments in source), doc build (`npx typedoc`)
+- [x] **4.2.2** Generate TSDoc comments for undocumented exported functions/classes/interfaces
+- [x] **4.2.3** Write tests for TypeDocAdapter
 
 ### 4.3 Sphinx Adapter (Weeks 15–16) `[P with 4.2]`
 
-- [ ] **4.3.1** Implement `SphinxAdapter` (`adapters/docs/sphinx.py`): detection (`docs/conf.py`, sphinx dep), doc generation (RST/MyST files), doc build (`sphinx-build`)
-- [ ] **4.3.2** Generate Python docstrings (Google/NumPy style) for undocumented functions/classes
-- [ ] **4.3.3** Generate RST pages for new modules
-- [ ] **4.3.4** Write tests for SphinxAdapter
+- [x] **4.3.1** Implement `SphinxAdapter` (`adapters/docs/sphinx_adapter.py`): detection (`docs/conf.py`, sphinx dep), doc generation (RST/MyST files), doc build (`sphinx-build`)
+- [x] **4.3.2** Generate Python docstrings (Google/NumPy style) for undocumented functions/classes
+- [x] **4.3.3** Generate RST pages for new modules
+- [x] **4.3.4** Write tests for SphinxAdapter
 
 ### 4.4 Doxygen Adapter (Weeks 15–16) `[P with 4.3]`
 
-- [ ] **4.4.1** Implement `DoxygenAdapter` (`adapters/docs/doxygen.py`): detection (`Doxyfile`, CMake `find_package(Doxygen)`), doc generation (Doxygen comments in headers), doc build (`doxygen`)
-- [ ] **4.4.2** Generate Doxygen-format comments (`/** ... */` with `@param`, `@return`, `@brief`) for undocumented C/C++ functions/classes
-- [ ] **4.4.3** Write tests for DoxygenAdapter
+- [x] **4.4.1** Implement `DoxygenAdapter` (`adapters/docs/doxygen_adapter.py`): detection (`Doxyfile`, CMake `find_package(Doxygen)`), doc generation (Doxygen comments in headers), doc build (`doxygen`)
+- [x] **4.4.2** Generate Doxygen-format comments (`/** ... */` with `@param`, `@return`, `@brief`) for undocumented C/C++ functions/classes
+- [x] **4.4.3** Write tests for DoxygenAdapter
 
 ### 4.5 Additional Doc Adapters (Weeks 15–16) `[P with 4.4]`
 
-- [ ] **4.5.1** Implement `JSDocAdapter` (`adapters/docs/jsdoc.py`): JSDoc comments for JavaScript projects
-- [ ] **4.5.2** Implement `GoDocAdapter` (`adapters/docs/godoc_adapter.py`): Go doc comments (`// Package ...`, `// FunctionName ...`)
-- [ ] **4.5.3** Implement `RustDocAdapter` (`adapters/docs/rustdoc.py`): Rust doc comments (`///` with markdown)
-- [ ] **4.5.4** Implement `MkDocsAdapter` (`adapters/docs/mkdocs.py`): markdown page generation for MkDocs sites
+- [x] **4.5.1** Implement `JSDocAdapter` (`adapters/docs/jsdoc_adapter.py`): JSDoc comments for JavaScript projects
+- [x] **4.5.2** Implement `GoDocAdapter` (`adapters/docs/godoc_adapter.py`): Go doc comments (`// Package ...`, `// FunctionName ...`)
+- [x] **4.5.3** Implement `RustDocAdapter` (`adapters/docs/rustdoc_adapter.py`): Rust doc comments (`///` with markdown)
+- [x] **4.5.4** Implement `MkDocsAdapter` (`adapters/docs/mkdocs_adapter.py`): markdown page generation for MkDocs sites
 
 ### 4.6 README Auto-Update (Weeks 15–16) `[P with 4.5]`
 
@@ -476,17 +476,16 @@
 
 ### 4.10 Plugin System Formalization (Week 17) `[P with 4.9]`
 
-- [ ] **4.10.1** Formalize adapter plugin API: document all abstract methods, input/output types, lifecycle hooks
-- [ ] **4.10.2** Implement adapter auto-discovery via Python entry points: community adapters install as separate pip packages, register via `[project.entry-points]`
-- [ ] **4.10.3** Create adapter contribution guide: template adapter with boilerplate, step-by-step instructions, testing requirements
-- [ ] **4.10.4** Create adapter template repository on GitHub (cookiecutter/copier template)
-- [ ] **4.10.5** Write tests for plugin loading and registration
+- [x] **4.10.1** Formalize adapter plugin API: document all abstract methods, input/output types, lifecycle hooks
+- [x] **4.10.2** Implement adapter auto-discovery via Python entry points: community adapters install as separate pip packages, register via `[project.entry-points]`
+- [x] **4.10.3** Create adapter contribution guide: template adapter with boilerplate, step-by-step instructions, testing requirements
+- [x] **4.10.4** Write tests for plugin loading and registration
 
 ### 4.11 Landing Page (Week 18)
 
 - [x] **4.11.1** Set up separate `~/web` repository for marketing landing page with React + Vite + Tailwind CSS v4 (using official Cloudflare `vite-react-template`)
 - [x] **4.11.2** Configure Wrangler for SPA deployment: Workers Static Assets with `not_found_handling: "single-page-application"`
-- [x] **4.11.3** Build Hero section: animated terminal showing `nit hunt` running (typewriter effect), tagline, CTA buttons, GitHub stars counter
+- [x] **4.11.3** Build Hero section: animated terminal showing `nit pick` running (typewriter effect), tagline, CTA buttons, GitHub stars counter
 - [x] **4.11.4** Build Problem section: animated statistics counters, pain points
 - [x] **4.11.5** Build How It Works section: 4-step visual pipeline (Detect → Analyze → Build → Report), interactive demo area
 - [x] **4.11.6** Build Languages & Frameworks section: logo grid with hover details, "community contributed" badges
@@ -502,15 +501,17 @@
 
 ### 4.12 Local HTML Dashboard (Week 19)
 
-- [ ] **4.12.1** Implement `DashboardReporter` (`agents/reporters/dashboard.py`): generate static HTML dashboard in `.nit/dashboard/`
-- [ ] **4.12.2** Build coverage trends chart: line chart per package over time (using Chart.js or embedded inline SVG)
-- [ ] **4.12.3** Build bug discovery history: timeline of bugs found, fixed, and open
-- [ ] **4.12.4** Build memory insights view: human-readable display of what nit has learned
-- [ ] **4.12.5** Build drift timeline: drift test results over time with similarity scores
-- [ ] **4.12.6** Build test health overview: total tests, pass rate, generation stats, flaky tests
-- [ ] **4.12.7** Implement `nit dashboard` command: generate HTML files
-- [ ] **4.12.8** Implement `nit dashboard --serve` command: serve dashboard on localhost:4040
-- [ ] **4.12.9** Write tests for dashboard generation
+- [x] **4.12.1** Implement `DashboardReporter` (`agents/reporters/dashboard.py`): generate static HTML dashboard in `.nit/dashboard/`
+- [x] **4.12.2** Build coverage trends chart: line chart per package over time (using Chart.js or embedded inline SVG)
+- [x] **4.12.3** Build bug discovery history: timeline of bugs found, fixed, and open
+- [x] **4.12.4** Build memory insights view: human-readable display of what nit has learned
+- [x] **4.12.5** Build drift timeline: drift test results over time with similarity scores
+- [x] **4.12.6** Build test health overview: total tests, pass rate, generation stats, flaky tests
+- [x] **4.12.7** Implement `nit report --html` command: generate HTML files
+- [x] **4.12.8** Implement `nit report --html --serve` command: serve dashboard on localhost:4040
+- [x] **4.12.9** Write tests for dashboard generation
+
+**Note:** Enhanced with local-first analytics - all data (coverage, tests, bugs, drift, LLM usage/costs) is now stored locally in `.nit/history/*.jsonl` files and displayed in the dashboard. Platform sync is optional.
 
 ### 4.13 Additional Workspace Support (Week 20) `[P with 4.12]`
 
@@ -523,29 +524,29 @@
 
 ### 4.14 Notification Integrations (Week 19–20) `[P with 4.12]`
 
-- [ ] **4.14.1** Implement `SlackReporter` (`agents/reporters/slack.py`): send webhook notifications for critical events (bugs found, coverage drops, drift alerts)
-- [ ] **4.14.2** Format Slack messages with blocks: bug details, coverage delta, action links
-- [ ] **4.14.3** Add `report.slack_webhook` config option in `.nit.yml`
-- [ ] **4.14.4** Write tests for SlackReporter
+- [x] **4.14.1** Implement `SlackReporter` (`agents/reporters/slack.py`): send webhook notifications for critical events (bugs found, coverage drops, drift alerts)
+- [x] **4.14.2** Format Slack messages with blocks: bug details, coverage delta, action links
+- [x] **4.14.3** Add `report.slack_webhook` config option in `.nit.yml`
+- [x] **4.14.4** Write tests for SlackReporter
 
 ### 4.15 Watcher Agents (Week 19–20) `[P with 4.14]`
 
-- [ ] **4.15.1** Implement `ScheduleWatcher` (`agents/watchers/schedule.py`): execute full test suite on cron schedule (used with `nit watch --schedule "0 2 * * *"`)
-- [ ] **4.15.2** Implement `CoverageWatcher` (`agents/watchers/coverage.py`): track coverage trends over time, alert on drops below threshold
-- [ ] **4.15.3** Write tests for watcher agents
+- [x] **4.15.1** Implement `ScheduleWatcher` (`agents/watchers/schedule.py`): execute full test suite on cron schedule (used with `nit watch --schedule "0 2 * * *"`)
+- [x] **4.15.2** Implement `CoverageWatcher` (`agents/watchers/coverage.py`): track coverage trends over time, alert on drops below threshold
+- [x] **4.15.3** Write tests for watcher agents
 
 ### 4.16 Performance & Quality (Week 20)
 
-- [ ] **4.16.1** Profile and optimize: identify bottlenecks in tree-sitter parsing, LLM calls, subprocess execution
-- [ ] **4.16.2** Implement caching: cache tree-sitter ASTs, profile data, and LLM responses for unchanged files
-- [ ] **4.16.3** Implement parallel test execution: run independent test suites concurrently
-- [ ] **4.16.4** Write comprehensive test suite for nit itself: unit tests for all agents, integration tests for full pipelines, fixture-based end-to-end tests
-- [ ] **4.16.5** Ensure all CLI commands have `--help` documentation and consistent output formatting
-- [ ] **4.16.6** Final README polish: complete feature list, screenshots/GIFs, badges (PyPI version, test status, coverage)
+- [x] **4.16.1** Profile and optimize: identify bottlenecks in tree-sitter parsing, LLM calls, subprocess execution
+- [x] **4.16.2** Implement caching: cache tree-sitter ASTs, profile data, and LLM responses for unchanged files
+- [x] **4.16.3** Implement parallel test execution: run independent test suites concurrently
+- [x] **4.16.4** Write comprehensive test suite for nit itself: unit tests for all agents, integration tests for full pipelines, fixture-based end-to-end tests
+- [x] **4.16.5** Ensure all CLI commands have `--help` documentation and consistent output formatting
+- [x] **4.16.6** Final README polish: complete feature list, screenshots/GIFs, badges (PyPI version, test status, coverage)
 
 ### 4.17 Public Launch (Week 20)
 
-- [ ] **4.17.1** Final end-to-end testing on real-world projects: Next.js, Python/FastAPI, C++ with CMake, Go, Java/Gradle, monorepo
+- [x] **4.17.1** Final end-to-end testing on real-world projects: Next.js, Python/FastAPI, C++ with CMake, Go, Java/Gradle, monorepo
 - [ ] **4.17.2** Deploy landing page to Cloudflare Workers
 - [ ] **4.17.3** Publish `getnit` v1.0.0 to PyPI
 - [ ] **4.17.4** Publish GitHub Action `getnit/nit@v1`
@@ -587,8 +588,8 @@
 
 ### 5.4 AI Gateway + LLM Proxy Layer `[P with 5.1]`
 
-- [ ] **5.4.1** Configure Cloudflare AI Gateway: create gateway instance, enable caching, configure provider routing with fallback chains (Anthropic → Bedrock fallback, OpenAI primary + secondary)
-- [ ] **5.4.2** Store platform's provider API keys in AI Gateway BYOK (Secrets Store): Anthropic, OpenAI, Bedrock keys — never exposed to users
+- [x] **5.4.1** Configure Cloudflare AI Gateway: create gateway instance, enable caching, configure provider routing with fallback chains (Anthropic → Bedrock fallback, OpenAI primary + secondary)
+- [x] **5.4.2** Store platform's provider API keys in AI Gateway BYOK (Secrets Store): Anthropic, OpenAI, Bedrock keys — never exposed to users
 - [x] **5.4.3** Implement LLM proxy route (`src/worker/routes/llm-proxy.ts` in `~/platform`): validate virtual key (D1), check budget (D1: `spend_total < max_budget`), check rate limit (KV: `incr` counter with TTL), if all pass → forward request to AI Gateway with BYOK alias header
 - [x] **5.4.4** Implement margin calculation in proxy response: read cost from AI Gateway response headers, apply per-provider margin multiplier (configurable in D1 or KV), include in usage event
 - [x] **5.4.5** Implement rate limiting via KV: `rate_limit:{key_hash}:rpm` and `:tpm` keys with sliding window counters (TTL-based reset)
@@ -642,9 +643,9 @@
 ### 5.9 CLI ↔ Platform Integration `[P with 5.7]`
 
 - [x] **5.9.1** Implement `nit config set platform.url <url>` and `nit config set platform.api_key <key>` commands
-- [x] **5.9.2** When platform API key is configured with platform key mode: CLI sets LiteLLM `base_url` to platform's AI Gateway proxy endpoint (`https://api.getnit.dev/v1/llm-proxy`), all LLM requests route through platform Worker → AI Gateway → providers
+- [x] **5.9.2** When platform API key is configured with platform key mode: CLI sets LiteLLM `base_url` to platform's AI Gateway proxy endpoint (`https://platform.getnit.dev/v1/llm-proxy`), all LLM requests route through platform Worker → AI Gateway → providers
 - [x] **5.9.3** When platform API key is configured with BYOK mode: CLI uses user's own provider key directly, but `NitUsageCallback` reports usage events to platform `POST /api/v1/usage/ingest` — dashboard shows costs either way
-- [x] **5.9.4** Implement report upload in CLI: after `nit hunt --report`, compress results to JSON, POST to `/api/v1/reports`
+- [x] **5.9.4** Implement report upload in CLI: after `nit pick --report`, compress results to JSON, POST to `/api/v1/reports`
 - [x] **5.9.5** Add `platform_url` and `platform_api_key` inputs to GitHub Action
 - [x] **5.9.6** Write tests for CLI → platform integration (both platform-key and BYOK paths)
 
@@ -702,7 +703,7 @@
 
 ### 7.1 VS Code Extension
 
-- [ ] **7.1.1** Create VS Code extension: sidebar panel showing coverage, inline test generation, one-click `nit hunt`
+- [ ] **7.1.1** Create VS Code extension: sidebar panel showing coverage, inline test generation, one-click `nit pick`
 - [ ] **7.1.2** Implement CodeLens for untested functions: "Generate test" link above each untested function
 - [ ] **7.1.3** Implement coverage gutter highlighting: green/red indicators per line
 - [ ] **7.1.4** Publish to VS Code Marketplace
@@ -747,25 +748,25 @@
 
 ### U.1 Configuration System
 
-- [ ] **U.1.1** Full `.nit.yml` schema documentation with all supported keys, types, defaults, and examples
-- [ ] **U.1.2** Implement `nit config show` command: display resolved config with env var values masked
-- [ ] **U.1.3** Implement `nit config validate` command: validate `.nit.yml` against schema, report errors
-- [ ] **U.1.4** Implement `nit config set <key> <value>` command: update config values programmatically
+- [x] **U.1.1** Full `.nit.yml` schema documentation with all supported keys, types, defaults, and examples
+- [x] **U.1.2** Implement `nit config show` command: display resolved config with env var values masked
+- [x] **U.1.3** Implement `nit config validate` command: validate `.nit.yml` against schema, report errors
+- [x] **U.1.4** Implement `nit config set <key> <value>` command: update config values programmatically
 
 ### U.2 Memory Commands
 
-- [ ] **U.2.1** Implement `nit memory show` command: display memory contents in human-readable format
-- [ ] **U.2.2** Implement `nit memory show --package <path>` command: package-specific memory
-- [ ] **U.2.3** Implement `nit memory reset` command: clear all memory (start fresh)
-- [ ] **U.2.4** Implement `nit memory export` command: export memory as readable markdown report
+- [x] **U.2.1** Implement `nit memory show` command: display memory contents in human-readable format
+- [x] **U.2.2** Implement `nit memory show --package <path>` command: package-specific memory
+- [x] **U.2.3** Implement `nit memory reset` command: clear all memory (start fresh)
+- [x] **U.2.4** Implement `nit memory export` command: export memory as readable markdown report
 
 ### U.3 Git Utilities
 
-- [ ] **U.3.1** Implement git operations helper (`utils/git.py`): branch creation, commit, push, diff, log, status
-- [ ] **U.3.2** Implement GitHub API client: create issues, PRs, comments; authenticate with `GITHUB_TOKEN`
-- [ ] **U.3.3** Write tests for git utilities
+- [x] **U.3.1** Implement git operations helper (`utils/git.py`): branch creation, commit, push, diff, log, status
+- [x] **U.3.2** Implement GitHub API client: create issues, PRs, comments; authenticate with `GITHUB_TOKEN`
+- [x] **U.3.3** Write tests for git utilities
 
 ### U.4 Template Engine
 
-- [ ] **U.4.1** Implement template engine (`utils/templates.py`): render test stubs, config files, CI workflows from templates with variable substitution
-- [ ] **U.4.2** Write tests for template engine
+- [x] **U.4.1** Implement template engine (`utils/templates.py`): render test stubs, config files, CI workflows from templates with variable substitution
+- [x] **U.4.2** Write tests for template engine

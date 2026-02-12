@@ -201,7 +201,7 @@ class InfraBuilder(BaseAgent):
                 data = json.loads(package_json.read_text())
                 dev_deps = data.get("devDependencies", {})
                 has_dep = "vitest" in dev_deps
-            except json.JSONDecodeError, OSError:
+            except (json.JSONDecodeError, OSError):
                 pass
 
         return has_config and has_dep
@@ -247,7 +247,7 @@ class InfraBuilder(BaseAgent):
                 data = json.loads(package_json.read_text())
                 dev_deps = data.get("devDependencies", {})
                 has_dep = "@playwright/test" in dev_deps
-            except json.JSONDecodeError, OSError:
+            except (json.JSONDecodeError, OSError):
                 pass
 
         return has_config and has_dep

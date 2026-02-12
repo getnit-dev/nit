@@ -829,3 +829,292 @@ class TestEdgeCases:
         profile = detect_workspace(tmp_path)
         assert isinstance(profile.root, str)
         assert profile.root == str(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Coverage gap tests — gradle settings.gradle name extraction
+# ---------------------------------------------------------------------------
+
+
+class TestGradleSettingsName:
+    def test_gradle_settings_name(self, tmp_path: Path) -> None:
+        """Test name extraction from settings.gradle rootProject.name."""
+        _write_file(
+            tmp_path,
+            "settings.gradle",
+            "rootProject.name = 'my-gradle-app'\n",
+        )
+        profile = detect_workspace(tmp_path)
+        # Should use the rootProject.name from settings.gradle
+        assert profile.packages[0].name == "my-gradle-app"
+
+    def test_gradle_settings_kts_name(self, tmp_path: Path) -> None:
+        """Test name extraction from settings.gradle.kts rootProject.name."""
+        _write_file(
+            tmp_path,
+            "settings.gradle.kts",
+            'rootProject.name = "my-kts-app"\n',
+        )
+        profile = detect_workspace(tmp_path)
+        assert profile.packages[0].name == "my-kts-app"
+
+
+# ---------------------------------------------------------------------------
+# Coverage gap tests — pnpm workspace parsing edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestPnpmWorkspaceParsing:
+    def test_pnpm_workspace_yaml_comment_stops_parsing(self, tmp_path: Path) -> None:
+        """Non-list line that isn't a comment stops parsing packages."""
+        _write_file(
+            tmp_path,
+            "pnpm-workspace.yaml",
+            "packages:\n  - 'packages/*'\nanother_key:\n  - ignored\n",
+        )
+        _write_package_json(tmp_path / "packages" / "x", {"name": "x"})
+        profile = detect_workspace(tmp_path)
+        assert profile.tool == "pnpm"
+        assert len(profile.packages) == 1
+
+    def test_pnpm_workspace_yaml_with_empty_items(self, tmp_path: Path) -> None:
+        """Empty pattern values should be skipped."""
+        _write_file(
+            tmp_path,
+            "pnpm-workspace.yaml",
+            "packages:\n  - ''\n  - 'packages/*'\n",
+        )
+        _write_package_json(tmp_path / "packages" / "y", {"name": "y"})
+        profile = detect_workspace(tmp_path)
+        assert profile.tool == "pnpm"
+
+
+# ---------------------------------------------------------------------------
+# Coverage gap tests — yarn/npm workspaces object form
+# ---------------------------------------------------------------------------
+
+
+class TestWorkspacesObjectForm:
+    def test_yarn_workspaces_dict_packages_key(self, tmp_path: Path) -> None:
+        """Yarn workspaces as dict with packages key."""
+        _write_package_json(
+            tmp_path,
+            {
+                "name": "root",
+                "workspaces": {"packages": ["packages/*"]},
+            },
+        )
+        (tmp_path / "yarn.lock").touch()
+        _write_package_json(tmp_path / "packages" / "z", {"name": "z"})
+        profile = detect_workspace(tmp_path)
+        assert profile.tool == "yarn"
+        assert profile.packages[0].name == "z"
+
+    def test_npm_workspaces_dict_form(self, tmp_path: Path) -> None:
+        """npm workspaces as object with packages key."""
+        _write_package_json(
+            tmp_path,
+            {
+                "name": "root",
+                "workspaces": {"packages": ["libs/*"]},
+            },
+        )
+        _write_package_json(tmp_path / "libs" / "core", {"name": "core"})
+        profile = detect_workspace(tmp_path)
+        assert profile.tool == "npm"
+        assert profile.packages[0].name == "core"
+
+    def test_npm_workspaces_dict_no_list(self, tmp_path: Path) -> None:
+        """npm workspaces object with packages that isn't a list."""
+        _write_package_json(
+            tmp_path,
+            {
+                "name": "root",
+                "workspaces": {"packages": "not-a-list"},
+            },
+        )
+        # Empty patterns -> no packages -> falls to generic
+        profile = detect_workspace(tmp_path)
+        assert profile.tool == "generic"
+
+
+# ---------------------------------------------------------------------------
+# Coverage gap tests — Go work single use with comment
+# ---------------------------------------------------------------------------
+
+
+class TestGoWorkEdgeCases:
+    def test_go_work_comments_skipped(self, tmp_path: Path) -> None:
+        """Go work file with comments in use block."""
+        _write_file(
+            tmp_path,
+            "go.work",
+            "go 1.21\n\nuse (\n    // comment\n    ./mod-a\n)\n",
+        )
+        _write_file(
+            tmp_path / "mod-a",
+            "go.mod",
+            "module github.com/user/mod-a\n\ngo 1.21\n",
+        )
+        profile = detect_workspace(tmp_path)
+        assert profile.tool == "go"
+        assert len(profile.packages) == 1
+
+
+# ---------------------------------------------------------------------------
+# Coverage gap tests — Gradle/Maven edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestGradleMavenEdgeCases:
+    def test_gradle_settings_no_includes(self, tmp_path: Path) -> None:
+        """settings.gradle with no include directives falls to generic."""
+        _write_file(
+            tmp_path,
+            "settings.gradle",
+            "rootProject.name = 'solo'\n",
+        )
+        profile = detect_workspace(tmp_path)
+        assert profile.tool == "generic"
+
+    def test_maven_pom_read_error(self, tmp_path: Path) -> None:
+        """Maven pom.xml that can't be parsed falls to generic."""
+        _write_file(
+            tmp_path,
+            "pom.xml",
+            "<project><name>no-modules</name></project>",
+        )
+        profile = detect_workspace(tmp_path)
+        assert profile.tool == "generic"
+
+
+# ---------------------------------------------------------------------------
+# Coverage gap tests — cmake no subdirectory dirs
+# ---------------------------------------------------------------------------
+
+
+class TestCMakeEdgeCases:
+    def test_cmake_subdirectory_not_exists(self, tmp_path: Path) -> None:
+        """CMake add_subdirectory pointing to nonexistent dirs."""
+        _write_file(
+            tmp_path,
+            "CMakeLists.txt",
+            "cmake_minimum_required(VERSION 3.20)\n"
+            "project(root)\n"
+            "add_subdirectory(nonexistent)\n",
+        )
+        profile = detect_workspace(tmp_path)
+        assert profile.tool == "cmake"
+        assert profile.packages == []
+
+
+# ---------------------------------------------------------------------------
+# Coverage gap tests — resolve JS workspace packages
+# ---------------------------------------------------------------------------
+
+
+class TestResolveJSWorkspacePackages:
+    def test_turborepo_with_package_json_workspaces_dict(self, tmp_path: Path) -> None:
+        """Turborepo resolves packages from package.json workspaces object."""
+        _write_file(tmp_path, "turbo.json", "{}")
+        _write_package_json(
+            tmp_path,
+            {"name": "root", "workspaces": {"packages": ["pkgs/*"]}},
+        )
+        _write_package_json(tmp_path / "pkgs" / "ui", {"name": "ui"})
+        profile = detect_workspace(tmp_path)
+        assert profile.tool == "turborepo"
+        assert len(profile.packages) == 1
+        assert profile.packages[0].name == "ui"
+
+
+# ---------------------------------------------------------------------------
+# Coverage gap tests — dependency graph: Go and Python deps
+# ---------------------------------------------------------------------------
+
+
+class TestDependencyGraphExtended:
+    def test_go_internal_deps(self, tmp_path: Path) -> None:
+        """Go workspace with internal module dependencies."""
+        _write_file(
+            tmp_path,
+            "go.work",
+            "go 1.21\n\nuse (\n    ./svc-a\n    ./svc-b\n)\n",
+        )
+        _write_file(
+            tmp_path / "svc-a",
+            "go.mod",
+            (
+                "module github.com/user/svc-a\n\ngo 1.21\n\nrequire (\n"
+                "    github.com/user/svc-b v0.1.0\n)\n"
+            ),
+        )
+        _write_file(
+            tmp_path / "svc-b",
+            "go.mod",
+            "module github.com/user/svc-b\n\ngo 1.21\n",
+        )
+        profile = detect_workspace(tmp_path)
+        assert profile.tool == "go"
+        a_pkg = next(p for p in profile.packages if p.name == "github.com/user/svc-a")
+        assert "github.com/user/svc-b" in a_pkg.dependencies
+
+    def test_python_internal_deps(self, tmp_path: Path) -> None:
+        """pnpm workspace with Python pyproject.toml internal deps."""
+        _write_file(
+            tmp_path,
+            "pnpm-workspace.yaml",
+            "packages:\n  - 'packages/*'\n",
+        )
+        # Package A depends on Package B
+        pkg_a = tmp_path / "packages" / "a"
+        pkg_a.mkdir(parents=True)
+        _write_package_json(pkg_a, {"name": "a"})
+        _write_file(
+            pkg_a,
+            "pyproject.toml",
+            '[project]\nname = "a"\ndependencies = ["b"]\n',
+        )
+        pkg_b = tmp_path / "packages" / "b"
+        pkg_b.mkdir(parents=True)
+        _write_package_json(pkg_b, {"name": "b"})
+
+        profile = detect_workspace(tmp_path)
+        a_pkg = next(p for p in profile.packages if p.name == "a")
+        assert "b" in a_pkg.dependencies
+
+    def test_pom_xml_name_from_dir(self, tmp_path: Path) -> None:
+        """Package name from pom.xml artifactId."""
+        _write_file(
+            tmp_path,
+            "pom.xml",
+            "<project>\n  <modules><module>svc</module></modules>\n</project>\n",
+        )
+        _write_file(
+            tmp_path / "svc",
+            "pom.xml",
+            "<project><artifactId>svc-core</artifactId></project>",
+        )
+        profile = detect_workspace(tmp_path)
+        assert profile.tool == "maven"
+        assert profile.packages[0].name == "svc-core"
+
+
+# ---------------------------------------------------------------------------
+# Coverage gap tests — _read_json error path
+# ---------------------------------------------------------------------------
+
+
+class TestReadJsonEdgeCases:
+    def test_read_json_nonexistent(self, tmp_path: Path) -> None:
+        """_read_json returns {} on missing file (tested via package_json)."""
+        # A directory with no package.json should still resolve its name
+        profile = detect_workspace(tmp_path)
+        assert profile.packages[0].name == tmp_path.name
+
+    def test_read_json_invalid_json(self, tmp_path: Path) -> None:
+        """_read_json returns {} on invalid JSON."""
+        _write_file(tmp_path, "package.json", "NOT VALID JSON!!")
+        profile = detect_workspace(tmp_path)
+        # Falls back to directory name since package.json can't be parsed
+        assert profile.packages[0].name == tmp_path.name

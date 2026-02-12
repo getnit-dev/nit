@@ -18,6 +18,7 @@ from nit.adapters.base import (
     TestFrameworkAdapter,
     ValidationResult,
 )
+from nit.adapters.coverage.go_cover_adapter import GoCoverAdapter
 from nit.llm.prompts.go_test_prompt import GoTestTemplate
 from nit.parsing.treesitter import (
     collect_error_ranges,
@@ -72,8 +73,12 @@ class GoTestAdapter(TestFrameworkAdapter):
         *,
         test_files: list[Path] | None = None,
         timeout: float = _DEFAULT_TIMEOUT,
+        collect_coverage: bool = True,
     ) -> RunResult:
-        """Execute tests via ``go test -json ./...`` and parse JSON stream."""
+        """Execute tests via ``go test -json ./...`` and parse JSON stream.
+
+        Optionally collects coverage using GoCoverAdapter.
+        """
         cmd = ["go", "test", "-json", "./..."]
         if test_files:
             # Run tests for packages containing the given files (relative to project_path)
@@ -111,7 +116,24 @@ class GoTestAdapter(TestFrameworkAdapter):
         raw_stderr = stderr_bytes.decode("utf-8", errors="replace")
         raw_output = raw_stdout + ("\n" + raw_stderr if raw_stderr else "")
 
-        return _parse_go_test_json(raw_stdout, raw_output, proc.returncode or 0)
+        result = _parse_go_test_json(raw_stdout, raw_output, proc.returncode or 0)
+
+        # Collect coverage if requested
+        if collect_coverage:
+            try:
+                coverage_adapter = GoCoverAdapter()
+                coverage_report = await coverage_adapter.run_coverage(
+                    project_path, test_files=test_files, timeout=timeout
+                )
+                result.coverage = coverage_report
+                logger.info(
+                    "Coverage collected: %.1f%% line coverage",
+                    coverage_report.overall_line_coverage,
+                )
+            except Exception as e:
+                logger.warning("Failed to collect coverage: %s", e)
+
+        return result
 
     def validate_test(self, test_code: str) -> ValidationResult:
         """Parse *test_code* as Go with tree-sitter and report syntax errors."""
@@ -125,6 +147,14 @@ class GoTestAdapter(TestFrameworkAdapter):
         error_ranges = collect_error_ranges(root)
         errors = [f"Syntax error at line {start}-{end}" for start, end in error_ranges]
         return ValidationResult(valid=False, errors=errors)
+
+    def get_required_packages(self) -> list[str]:
+        """Return required packages for Go test."""
+        return []  # Go test is built-in, no extra packages needed
+
+    def get_required_commands(self) -> list[str]:
+        """Return required commands for Go test."""
+        return ["go"]
 
 
 # ── Output parsing ──────────────────────────────────────────────

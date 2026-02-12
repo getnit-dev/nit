@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ['3.14']
+        python-version: ['3.11', '3.12', '3.13']
 
     steps:
       - uses: actions/checkout@v4
@@ -45,5 +45,11 @@ jobs:
       - name: Type check (mypy)
         run: mypy src/ tests/
 
-      - name: Run tests
-        run: pytest --cov=src/nit --cov-report=term
+      - name: Run tests with coverage
+        run: pytest --cov=src/nit --cov-report=term-missing --cov-fail-under=90 -m "not e2e"
+
+      - name: Run e2e tests (Linux only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          git clone https://github.com/getnit-dev/examples.git /tmp/examples
+          EXAMPLES_DIR=/tmp/examples pytest tests/e2e/ -v

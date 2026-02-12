@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING, cast
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -19,7 +22,7 @@ from nit.adapters.coverage import (
     FunctionCoverage,
     LineCoverage,
 )
-from nit.adapters.coverage.istanbul import IstanbulAdapter
+from nit.adapters.coverage.istanbul import IstanbulAdapter, _has_jest, _has_vitest
 
 # ── Helpers ──────────────────────────────────────────────────────
 
@@ -512,3 +515,591 @@ def test_coverage_report_overall_metrics(tmp_path: Path) -> None:
 
     # Should have 2 files total
     assert len(report.files) == 2
+
+
+# ── Tests: Additional detection paths ────────────────────────────
+
+
+def test_istanbul_detect_with_vitest_workspace(tmp_path: Path) -> None:
+    """Should detect Istanbul when vitest.workspace.* exists."""
+    _write_file(tmp_path, "vitest.workspace.ts", "export default []")
+
+    adapter = IstanbulAdapter()
+    assert adapter.detect(tmp_path) is True
+
+
+def test_istanbul_detect_with_vitest_coverage_v8(tmp_path: Path) -> None:
+    """Should detect Istanbul when @vitest/coverage-v8 is in devDependencies."""
+    _write_json(
+        tmp_path,
+        "package.json",
+        {"devDependencies": {"@vitest/coverage-v8": "^0.34.0"}},
+    )
+
+    adapter = IstanbulAdapter()
+    assert adapter.detect(tmp_path) is True
+
+
+def test_istanbul_detect_with_deps_in_dependencies(tmp_path: Path) -> None:
+    """Should detect Istanbul when vitest is in dependencies (not devDependencies)."""
+    _write_json(
+        tmp_path,
+        "package.json",
+        {"dependencies": {"vitest": "^0.34.0"}},
+    )
+
+    adapter = IstanbulAdapter()
+    assert adapter.detect(tmp_path) is True
+
+
+def test_istanbul_detect_malformed_package_json(tmp_path: Path) -> None:
+    """Should not crash on malformed package.json; just returns False."""
+    _write_file(tmp_path, "package.json", "{ this is not valid json !!!")
+
+    adapter = IstanbulAdapter()
+    assert adapter.detect(tmp_path) is False
+
+
+def test_istanbul_detect_package_json_no_relevant_deps(tmp_path: Path) -> None:
+    """Should not detect when package.json has unrelated deps only."""
+    _write_json(
+        tmp_path,
+        "package.json",
+        {"devDependencies": {"lodash": "^4.0.0", "express": "^4.18.0"}},
+    )
+
+    adapter = IstanbulAdapter()
+    assert adapter.detect(tmp_path) is False
+
+
+def test_istanbul_detect_nyc_output(tmp_path: Path) -> None:
+    """Should detect Istanbul when .nyc_output/coverage-final.json exists."""
+    _write_json(tmp_path, ".nyc_output/coverage-final.json", {})
+
+    adapter = IstanbulAdapter()
+    assert adapter.detect(tmp_path) is True
+
+
+# ── Tests: _find_and_parse_coverage ──────────────────────────────
+
+
+def test_find_and_parse_coverage_from_coverage_dir(tmp_path: Path) -> None:
+    """Should find and parse coverage from coverage/ directory."""
+    _write_json(
+        tmp_path,
+        "coverage/coverage-final.json",
+        cast("dict[str, object]", _EMPTY_FILE_COVERAGE),
+    )
+
+    adapter = IstanbulAdapter()
+    report = adapter._find_and_parse_coverage(tmp_path)
+
+    assert len(report.files) == 1
+    assert "/project/src/empty.ts" in report.files
+
+
+def test_find_and_parse_coverage_from_nyc_output(tmp_path: Path) -> None:
+    """Should find coverage from .nyc_output/ when coverage/ is absent."""
+    _write_json(
+        tmp_path,
+        ".nyc_output/coverage-final.json",
+        cast("dict[str, object]", _EMPTY_FILE_COVERAGE),
+    )
+
+    adapter = IstanbulAdapter()
+    report = adapter._find_and_parse_coverage(tmp_path)
+
+    assert len(report.files) == 1
+
+
+def test_find_and_parse_coverage_no_file(tmp_path: Path) -> None:
+    """Should return empty report when no coverage file exists."""
+    adapter = IstanbulAdapter()
+    report = adapter._find_and_parse_coverage(tmp_path)
+
+    assert len(report.files) == 0
+
+
+def test_find_and_parse_coverage_prefers_first_path(tmp_path: Path) -> None:
+    """Should prefer coverage/ over .nyc_output/ when both exist."""
+    # Write different data to each location
+    _write_json(
+        tmp_path,
+        "coverage/coverage-final.json",
+        cast("dict[str, object]", _SAMPLE_ISTANBUL_COVERAGE),
+    )
+    _write_json(
+        tmp_path,
+        ".nyc_output/coverage-final.json",
+        cast("dict[str, object]", _EMPTY_FILE_COVERAGE),
+    )
+
+    adapter = IstanbulAdapter()
+    report = adapter._find_and_parse_coverage(tmp_path)
+
+    # Should find the 2-file sample, not the 1-file empty one
+    assert len(report.files) == 2
+
+
+# ── Tests: Additional parsing edge cases ─────────────────────────
+
+
+def test_istanbul_parse_branch_partial_taken(tmp_path: Path) -> None:
+    """Should correctly handle branches where only some are taken."""
+    data = {
+        "/project/src/branch.ts": {
+            "statementMap": {},
+            "fnMap": {},
+            "branchMap": {
+                "0": {
+                    "loc": {"start": {"line": 10, "column": 0}},
+                    "type": "if",
+                },
+            },
+            "s": {},
+            "f": {},
+            "b": {"0": [5, 0, 3]},
+        },
+    }
+    coverage_file = tmp_path / "cov.json"
+    _write_json(tmp_path, "cov.json", cast("dict[str, object]", data))
+
+    adapter = IstanbulAdapter()
+    report = adapter.parse_coverage_file(coverage_file)
+
+    branch_file = report.files["/project/src/branch.ts"]
+    assert len(branch_file.branches) == 1
+
+    branch = branch_file.branches[0]
+    # [5, 0, 3] -> 2 of 3 taken (5>0 and 3>0, 0 is not > 0)
+    assert branch.taken_count == 2
+    assert branch.total_count == 3
+    assert branch.branch_id == 0
+
+
+def test_istanbul_parse_branch_non_digit_id(tmp_path: Path) -> None:
+    """Should default branch_id to 0 for non-digit branch IDs."""
+    data = {
+        "/project/src/branch2.ts": {
+            "statementMap": {},
+            "fnMap": {},
+            "branchMap": {
+                "abc": {
+                    "loc": {"start": {"line": 3, "column": 0}},
+                    "type": "cond-expr",
+                },
+            },
+            "s": {},
+            "f": {},
+            "b": {"abc": [1, 0]},
+        },
+    }
+    coverage_file = tmp_path / "cov.json"
+    _write_json(tmp_path, "cov.json", cast("dict[str, object]", data))
+
+    adapter = IstanbulAdapter()
+    report = adapter.parse_coverage_file(coverage_file)
+
+    branch = report.files["/project/src/branch2.ts"].branches[0]
+    assert branch.branch_id == 0  # fallback for non-digit
+    assert branch.taken_count == 1
+    assert branch.total_count == 2
+
+
+def test_istanbul_parse_branch_non_list_counts_skipped(tmp_path: Path) -> None:
+    """Should skip branches where counts is not a list."""
+    data = {
+        "/project/src/weird.ts": {
+            "statementMap": {},
+            "fnMap": {},
+            "branchMap": {
+                "0": {
+                    "loc": {"start": {"line": 1, "column": 0}},
+                    "type": "if",
+                },
+            },
+            "s": {},
+            "f": {},
+            "b": {"0": "not-a-list"},
+        },
+    }
+    coverage_file = tmp_path / "cov.json"
+    _write_json(tmp_path, "cov.json", cast("dict[str, object]", data))
+
+    adapter = IstanbulAdapter()
+    report = adapter.parse_coverage_file(coverage_file)
+
+    assert len(report.files["/project/src/weird.ts"].branches) == 0
+
+
+def test_istanbul_parse_function_anonymous_fallback(tmp_path: Path) -> None:
+    """Should use anonymous_N fallback when fnMap entry has no name."""
+    data = {
+        "/project/src/anon.ts": {
+            "statementMap": {},
+            "fnMap": {
+                "0": {
+                    "loc": {"start": {"line": 5, "column": 0}},
+                },
+            },
+            "branchMap": {},
+            "s": {},
+            "f": {"0": 3},
+            "b": {},
+        },
+    }
+    coverage_file = tmp_path / "cov.json"
+    _write_json(tmp_path, "cov.json", cast("dict[str, object]", data))
+
+    adapter = IstanbulAdapter()
+    report = adapter.parse_coverage_file(coverage_file)
+
+    funcs = report.files["/project/src/anon.ts"].functions
+    assert len(funcs) == 1
+    assert funcs[0].name == "anonymous_0"
+    assert funcs[0].execution_count == 3
+    assert funcs[0].line_number == 5
+
+
+def test_istanbul_parse_function_missing_fnmap_entry(tmp_path: Path) -> None:
+    """Should handle fn count with no matching fnMap entry gracefully."""
+    data = {
+        "/project/src/missing_fn.ts": {
+            "statementMap": {},
+            "fnMap": {},
+            "branchMap": {},
+            "s": {},
+            "f": {"0": 2},  # fn count exists but no fnMap entry
+            "b": {},
+        },
+    }
+    coverage_file = tmp_path / "cov.json"
+    _write_json(tmp_path, "cov.json", cast("dict[str, object]", data))
+
+    adapter = IstanbulAdapter()
+    report = adapter.parse_coverage_file(coverage_file)
+
+    funcs = report.files["/project/src/missing_fn.ts"].functions
+    assert len(funcs) == 1
+    # Falls back to anonymous_0 name and line 0
+    assert funcs[0].name == "anonymous_0"
+    assert funcs[0].line_number == 0
+    assert funcs[0].execution_count == 2
+
+
+def test_istanbul_parse_line_aggregation_same_line(tmp_path: Path) -> None:
+    """Should aggregate statement counts on the same line."""
+    data = {
+        "/project/src/multi.ts": {
+            "statementMap": {
+                "0": {"start": {"line": 1, "column": 0}, "end": {"line": 1, "column": 10}},
+                "1": {"start": {"line": 1, "column": 12}, "end": {"line": 1, "column": 20}},
+                "2": {"start": {"line": 2, "column": 0}, "end": {"line": 2, "column": 10}},
+            },
+            "fnMap": {},
+            "branchMap": {},
+            "s": {"0": 3, "1": 5, "2": 1},
+            "f": {},
+            "b": {},
+        },
+    }
+    coverage_file = tmp_path / "cov.json"
+    _write_json(tmp_path, "cov.json", cast("dict[str, object]", data))
+
+    adapter = IstanbulAdapter()
+    report = adapter.parse_coverage_file(coverage_file)
+
+    lines = report.files["/project/src/multi.ts"].lines
+    assert len(lines) == 2  # Two distinct line numbers
+
+    line1 = next(ln for ln in lines if ln.line_number == 1)
+    # Aggregated from both entries: three plus five equals eight
+    assert line1.execution_count == 8
+
+    line2 = next(ln for ln in lines if ln.line_number == 2)
+    assert line2.execution_count == 1
+
+
+def test_istanbul_parse_statement_no_line(tmp_path: Path) -> None:
+    """Should skip statements without a start line."""
+    data = {
+        "/project/src/noline.ts": {
+            "statementMap": {
+                "0": {"start": {"column": 0}, "end": {"line": 1, "column": 10}},
+                "1": {},
+            },
+            "fnMap": {},
+            "branchMap": {},
+            "s": {"0": 3, "1": 5},
+            "f": {},
+            "b": {},
+        },
+    }
+    coverage_file = tmp_path / "cov.json"
+    _write_json(tmp_path, "cov.json", cast("dict[str, object]", data))
+
+    adapter = IstanbulAdapter()
+    report = adapter.parse_coverage_file(coverage_file)
+
+    # Both statements lack a valid line, so no lines produced
+    assert len(report.files["/project/src/noline.ts"].lines) == 0
+
+
+def test_istanbul_parse_missing_maps(tmp_path: Path) -> None:
+    """Should handle data with entirely missing maps (no keys at all)."""
+    data: dict[str, object] = {
+        "/project/src/bare.ts": {},
+    }
+    coverage_file = tmp_path / "cov.json"
+    _write_json(tmp_path, "cov.json", data)
+
+    adapter = IstanbulAdapter()
+    report = adapter.parse_coverage_file(coverage_file)
+
+    bare = report.files["/project/src/bare.ts"]
+    assert len(bare.lines) == 0
+    assert len(bare.functions) == 0
+    assert len(bare.branches) == 0
+
+
+def test_istanbul_parse_empty_json_object(tmp_path: Path) -> None:
+    """Should return empty report for empty JSON object."""
+    coverage_file = tmp_path / "empty.json"
+    _write_json(tmp_path, "empty.json", {})
+
+    adapter = IstanbulAdapter()
+    report = adapter.parse_coverage_file(coverage_file)
+
+    assert len(report.files) == 0
+
+
+def test_istanbul_parse_lines_sorted(tmp_path: Path) -> None:
+    """Line coverage entries should be sorted by line number."""
+    data = {
+        "/project/src/sorted.ts": {
+            "statementMap": {
+                "0": {"start": {"line": 10, "column": 0}, "end": {"line": 10, "column": 10}},
+                "1": {"start": {"line": 3, "column": 0}, "end": {"line": 3, "column": 10}},
+                "2": {"start": {"line": 7, "column": 0}, "end": {"line": 7, "column": 10}},
+            },
+            "fnMap": {},
+            "branchMap": {},
+            "s": {"0": 1, "1": 2, "2": 3},
+            "f": {},
+            "b": {},
+        },
+    }
+    coverage_file = tmp_path / "cov.json"
+    _write_json(tmp_path, "cov.json", cast("dict[str, object]", data))
+
+    adapter = IstanbulAdapter()
+    report = adapter.parse_coverage_file(coverage_file)
+
+    lines = report.files["/project/src/sorted.ts"].lines
+    line_numbers = [ln.line_number for ln in lines]
+    assert line_numbers == [3, 7, 10]
+
+
+def test_istanbul_parse_branch_all_untaken(tmp_path: Path) -> None:
+    """Should correctly report zero taken when all branch arms are untaken."""
+    data = {
+        "/project/src/nottaken.ts": {
+            "statementMap": {},
+            "fnMap": {},
+            "branchMap": {
+                "0": {
+                    "loc": {"start": {"line": 5, "column": 0}},
+                    "type": "if",
+                },
+            },
+            "s": {},
+            "f": {},
+            "b": {"0": [0, 0]},
+        },
+    }
+    coverage_file = tmp_path / "cov.json"
+    _write_json(tmp_path, "cov.json", cast("dict[str, object]", data))
+
+    adapter = IstanbulAdapter()
+    report = adapter.parse_coverage_file(coverage_file)
+
+    branch = report.files["/project/src/nottaken.ts"].branches[0]
+    assert branch.taken_count == 0
+    assert branch.total_count == 2
+    assert branch.coverage_percentage == 0.0
+
+
+# ── Coverage gap tests: run_coverage, _has_vitest, _has_jest ──────────
+
+
+def test_has_vitest_true(tmp_path: Path) -> None:
+    """_has_vitest returns True when vitest config exists."""
+    _write_file(tmp_path, "vitest.config.ts", "export default {}")
+    assert _has_vitest(tmp_path) is True
+
+
+def test_has_vitest_false(tmp_path: Path) -> None:
+    """_has_vitest returns False when no vitest config."""
+    assert _has_vitest(tmp_path) is False
+
+
+def test_has_jest_true(tmp_path: Path) -> None:
+    """_has_jest returns True when jest config exists."""
+    _write_file(tmp_path, "jest.config.js", "module.exports = {}")
+    assert _has_jest(tmp_path) is True
+
+
+def test_has_jest_false(tmp_path: Path) -> None:
+    """_has_jest returns False when no jest config."""
+    assert _has_jest(tmp_path) is False
+
+
+@pytest.mark.asyncio
+async def test_istanbul_run_coverage_vitest(tmp_path: Path) -> None:
+    """run_coverage uses vitest when vitest config exists."""
+    _write_file(tmp_path, "vitest.config.ts", "export default {}")
+    _write_json(
+        tmp_path,
+        "coverage/coverage-final.json",
+        cast("dict[str, object]", _EMPTY_FILE_COVERAGE),
+    )
+    adapter = IstanbulAdapter()
+    with patch(
+        "asyncio.create_subprocess_exec",
+        new_callable=AsyncMock,
+    ) as mock_proc:
+        proc = AsyncMock()
+        proc.wait = AsyncMock(return_value=0)
+        proc.returncode = 0
+        mock_proc.return_value = proc
+        report = await adapter.run_coverage(tmp_path)
+    assert len(report.files) == 1
+
+
+@pytest.mark.asyncio
+async def test_istanbul_run_coverage_jest(tmp_path: Path) -> None:
+    """run_coverage uses jest when jest config exists."""
+    _write_file(tmp_path, "jest.config.js", "module.exports = {}")
+    _write_json(
+        tmp_path,
+        "coverage/coverage-final.json",
+        cast("dict[str, object]", _EMPTY_FILE_COVERAGE),
+    )
+    adapter = IstanbulAdapter()
+    with patch(
+        "asyncio.create_subprocess_exec",
+        new_callable=AsyncMock,
+    ) as mock_proc:
+        proc = AsyncMock()
+        proc.wait = AsyncMock(return_value=0)
+        proc.returncode = 0
+        mock_proc.return_value = proc
+        report = await adapter.run_coverage(tmp_path)
+    assert len(report.files) == 1
+
+
+@pytest.mark.asyncio
+async def test_istanbul_run_coverage_no_runner(tmp_path: Path) -> None:
+    """run_coverage raises when no supported test runner found."""
+    adapter = IstanbulAdapter()
+    with pytest.raises(RuntimeError, match="No supported test runner"):
+        await adapter.run_coverage(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_istanbul_run_coverage_vitest_timeout(
+    tmp_path: Path,
+) -> None:
+    """run_coverage handles vitest timeout."""
+    _write_file(tmp_path, "vitest.config.ts", "export default {}")
+    adapter = IstanbulAdapter()
+    with patch(
+        "asyncio.create_subprocess_exec",
+        new_callable=AsyncMock,
+    ) as mock_proc:
+        proc = AsyncMock()
+        # First call (inside wait_for) raises TimeoutError; second (cleanup) returns normally
+        proc.wait = AsyncMock(side_effect=[TimeoutError, None])
+        proc.returncode = None
+        proc.kill = MagicMock()
+        mock_proc.return_value = proc
+        report = await adapter.run_coverage(tmp_path, timeout=0.01)
+    # Returns whatever was found (empty in this case)
+    assert isinstance(report, CoverageReport)
+
+
+@pytest.mark.asyncio
+async def test_istanbul_run_coverage_vitest_error(
+    tmp_path: Path,
+) -> None:
+    """run_coverage handles vitest errors."""
+    _write_file(tmp_path, "vitest.config.ts", "export default {}")
+    adapter = IstanbulAdapter()
+    with patch(
+        "asyncio.create_subprocess_exec",
+        new_callable=AsyncMock,
+        side_effect=OSError("npx not found"),
+    ):
+        report = await adapter.run_coverage(tmp_path)
+    assert isinstance(report, CoverageReport)
+
+
+@pytest.mark.asyncio
+async def test_istanbul_run_coverage_jest_timeout(
+    tmp_path: Path,
+) -> None:
+    """run_coverage handles jest timeout."""
+    _write_file(tmp_path, "jest.config.js", "module.exports = {}")
+    adapter = IstanbulAdapter()
+    with patch(
+        "asyncio.create_subprocess_exec",
+        new_callable=AsyncMock,
+    ) as mock_proc:
+        proc = AsyncMock()
+        # First call (inside wait_for) raises TimeoutError; second (cleanup) returns normally
+        proc.wait = AsyncMock(side_effect=[TimeoutError, None])
+        proc.returncode = None
+        proc.kill = MagicMock()
+        mock_proc.return_value = proc
+        report = await adapter.run_coverage(tmp_path, timeout=0.01)
+    assert isinstance(report, CoverageReport)
+
+
+@pytest.mark.asyncio
+async def test_istanbul_run_coverage_jest_error(
+    tmp_path: Path,
+) -> None:
+    """run_coverage handles jest errors."""
+    _write_file(tmp_path, "jest.config.js", "module.exports = {}")
+    adapter = IstanbulAdapter()
+    with patch(
+        "asyncio.create_subprocess_exec",
+        new_callable=AsyncMock,
+        side_effect=OSError("npx not found"),
+    ):
+        report = await adapter.run_coverage(tmp_path)
+    assert isinstance(report, CoverageReport)
+
+
+@pytest.mark.asyncio
+async def test_istanbul_run_coverage_vitest_with_test_files(
+    tmp_path: Path,
+) -> None:
+    """run_coverage passes test_files to vitest command."""
+    _write_file(tmp_path, "vitest.config.ts", "export default {}")
+    _write_json(
+        tmp_path,
+        "coverage/coverage-final.json",
+        cast("dict[str, object]", _EMPTY_FILE_COVERAGE),
+    )
+    adapter = IstanbulAdapter()
+    with patch(
+        "asyncio.create_subprocess_exec",
+        new_callable=AsyncMock,
+    ) as mock_proc:
+        proc = AsyncMock()
+        proc.wait = AsyncMock(return_value=0)
+        proc.returncode = 0
+        mock_proc.return_value = proc
+        report = await adapter.run_coverage(tmp_path, test_files=[tmp_path / "test_math.ts"])
+    assert len(report.files) == 1

@@ -216,7 +216,7 @@ class GcovAdapter(CoverageAdapter):
                     if result.success and result.stdout.strip():
                         # llvm-cov export --format=text is actually JSON
                         return self._parse_llvm_cov_json_string(result.stdout)
-                except FileNotFoundError, ValueError, json.JSONDecodeError:
+                except (FileNotFoundError, ValueError, json.JSONDecodeError):
                     continue
         return CoverageReport()
 

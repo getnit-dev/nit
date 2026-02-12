@@ -1,11 +1,8 @@
 """Tests for PackageMemory."""
 
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 from nit.memory.package_memory import PackageMemory
 

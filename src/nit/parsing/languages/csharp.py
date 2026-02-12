@@ -84,10 +84,10 @@ class CSharpExtractor(LanguageExtractor):
         ]
 
     def _parse_using(self, node: tree_sitter.Node) -> ImportInfo:
-        # using_directive: "using" (identifier | scoped_identifier) ";"
+        # using_directive: "using" (identifier | qualified_name) ";"
         module = ""
         for child in node.children:
-            if child.type in ("identifier", "scoped_identifier"):
+            if child.type in ("identifier", "qualified_name", "scoped_identifier"):
                 module = _text(child)
                 break
         return ImportInfo(

@@ -17,6 +17,9 @@ from nit.memory.store import MemoryStore
 
 logger = logging.getLogger(__name__)
 
+# Display constants for markdown export
+_MAX_COVERAGE_SNAPSHOTS = 5
+
 
 class PackageMemory:
     """Per-package memory for test patterns, issues, and coverage history.
@@ -194,3 +197,98 @@ class PackageMemory:
         """Clear all package memory."""
         self._store.clear()
         self._load()
+
+    def to_dict(self) -> dict[str, Any]:
+        """Export memory as a dictionary for display or serialization.
+
+        Returns:
+            Dictionary containing all memory data.
+        """
+        return self._data.copy()
+
+    def to_markdown(self) -> str:
+        """Export memory as a human-readable markdown report.
+
+        Returns:
+            Markdown-formatted string containing all memory data.
+        """
+        sections = [
+            f"# Package Memory Report: {self._package_name}",
+            "",
+            *self._format_test_patterns_section(),
+            *self._format_known_issues_section(),
+            *self._format_coverage_history_section(),
+            *self._format_llm_feedback_section(),
+        ]
+        return "\n".join(sections)
+
+    def _format_test_patterns_section(self) -> list[str]:
+        """Format test patterns section for markdown export."""
+        lines = ["## Test Patterns", ""]
+        test_patterns = self.get_test_patterns()
+        if test_patterns:
+            lines.extend(f"- **{key}**: {value}" for key, value in test_patterns.items())
+        else:
+            lines.append("*No test patterns recorded*")
+        lines.append("")
+        return lines
+
+    def _format_known_issues_section(self) -> list[str]:
+        """Format known issues section for markdown export."""
+        lines = ["## Known Issues", ""]
+        known_issues = self.get_known_issues()
+        if not known_issues:
+            lines.extend(["*No known issues recorded*", ""])
+            return lines
+
+        for idx, issue in enumerate(known_issues, start=1):
+            lines.append(f"### Issue {idx}")
+            lines.append(f"- **Issue**: {issue.get('issue', 'N/A')}")
+            if issue.get("workaround"):
+                lines.append(f"- **Workaround**: {issue['workaround']}")
+            lines.append(f"- **Timestamp**: {issue.get('timestamp', 'Unknown')}")
+            if issue.get("context"):
+                lines.append(f"- **Context**: {issue['context']}")
+            lines.append("")
+        return lines
+
+    def _format_coverage_history_section(self) -> list[str]:
+        """Format coverage history section for markdown export."""
+        lines = ["## Coverage History", ""]
+        coverage_history = self.get_coverage_history()
+        if not coverage_history:
+            lines.extend(["*No coverage history recorded*", ""])
+            return lines
+
+        lines.append(f"Total snapshots: {len(coverage_history)}")
+        lines.append("")
+        # Show latest snapshots
+        recent = coverage_history[-_MAX_COVERAGE_SNAPSHOTS:]
+        for snapshot in reversed(recent):
+            timestamp = snapshot.get("timestamp", "Unknown")
+            coverage_pct = snapshot.get("coverage_percent", 0)
+            lines.append(f"- **{timestamp}**: {coverage_pct:.1f}%")
+
+        if len(coverage_history) > _MAX_COVERAGE_SNAPSHOTS:
+            remaining = len(coverage_history) - _MAX_COVERAGE_SNAPSHOTS
+            lines.append(f"- *(and {remaining} more snapshots)*")
+        lines.append("")
+        return lines
+
+    def _format_llm_feedback_section(self) -> list[str]:
+        """Format LLM feedback section for markdown export."""
+        lines = ["## LLM Feedback", ""]
+        llm_feedback = self.get_llm_feedback()
+        if not llm_feedback:
+            lines.extend(["*No LLM feedback recorded*", ""])
+            return lines
+
+        for idx, feedback in enumerate(llm_feedback, start=1):
+            lines.append(f"### Feedback {idx}")
+            lines.append(f"- **Type**: {feedback.get('type', 'N/A')}")
+            lines.append(f"- **Content**: {feedback.get('content', 'N/A')}")
+            lines.append(f"- **Timestamp**: {feedback.get('timestamp', 'Unknown')}")
+            if feedback.get("metadata"):
+                lines.append(f"- **Metadata**: {feedback['metadata']}")
+            lines.append("")
+        return lines

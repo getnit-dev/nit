@@ -19,8 +19,11 @@ import pytest
 
 from nit.agents.analyzers.diff import (
     ChangeType,
+    DiffAnalysisResult,
     DiffAnalysisTask,
     DiffAnalyzer,
+    FileChange,
+    FileMapping,
 )
 from nit.agents.base import TaskInput, TaskStatus
 
@@ -568,3 +571,204 @@ def test_diff_analyzer_description() -> None:
     """Test DiffAnalyzer description property."""
     analyzer = DiffAnalyzer(Path())
     assert "delta-focused" in analyzer.description.lower()
+
+
+# ── Test DiffAnalysisTask post_init ──────────────────────────────
+
+
+def test_diff_analysis_task_post_init() -> None:
+    """Test DiffAnalysisTask __post_init__ sets target from project_root."""
+    task = DiffAnalysisTask(project_root="/my/project")
+    assert task.target == "/my/project"
+
+
+def test_diff_analysis_task_preserves_target() -> None:
+    """Test DiffAnalysisTask preserves target if already set."""
+    task = DiffAnalysisTask(target="/custom", project_root="/my/project")
+    assert task.target == "/custom"
+
+
+# ── Test _parse_numstat_line with binary files ───────────────────
+
+
+def test_parse_numstat_binary() -> None:
+    """Binary files use '-' for line counts."""
+    analyzer = DiffAnalyzer(Path())
+    result = analyzer._parse_diff_line("-\t-\timage.png")
+    assert result is not None
+    assert result.lines_added == 0
+    assert result.lines_removed == 0
+
+
+# ── Test _parse_status_line with unknown status ──────────────────
+
+
+def test_parse_diff_line_unknown_status() -> None:
+    """Unknown status letters should return None."""
+    analyzer = DiffAnalyzer(Path())
+    result = analyzer._parse_diff_line("X\tsomefile.py")
+    assert result is None
+
+
+# ── Test _categorize_changes ─────────────────────────────────────
+
+
+def test_categorize_changes_skips_deleted() -> None:
+    """Deleted files should not appear in source or test lists."""
+    analyzer = DiffAnalyzer(Path())
+    changes = [
+        FileChange(path="src/foo.py", change_type=ChangeType.DELETED),
+        FileChange(path="src/bar.py", change_type=ChangeType.MODIFIED),
+    ]
+    result = analyzer._categorize_changes(changes)
+    assert "src/foo.py" not in result.changed_source_files
+    assert "src/bar.py" in result.changed_source_files
+
+
+def test_categorize_changes_tracks_line_counts() -> None:
+    """Line counts should be aggregated."""
+    analyzer = DiffAnalyzer(Path())
+    changes = [
+        FileChange(
+            path="a.py",
+            change_type=ChangeType.MODIFIED,
+            lines_added=10,
+            lines_removed=5,
+        ),
+        FileChange(
+            path="b.py",
+            change_type=ChangeType.MODIFIED,
+            lines_added=20,
+            lines_removed=3,
+        ),
+    ]
+    result = analyzer._categorize_changes(changes)
+    assert result.total_lines_added == 30
+    assert result.total_lines_removed == 8
+
+
+def test_categorize_non_source_file() -> None:
+    """Non-source files (e.g. .md) should not be categorized."""
+    analyzer = DiffAnalyzer(Path())
+    changes = [FileChange(path="README.md", change_type=ChangeType.MODIFIED)]
+    result = analyzer._categorize_changes(changes)
+    assert result.changed_source_files == []
+    assert result.changed_test_files == []
+
+
+# ── Test _detect_language extended ───────────────────────────────
+
+
+def test_detect_language_cpp_variants() -> None:
+    """All C++ extensions should map to 'cpp'."""
+    analyzer = DiffAnalyzer(Path())
+    for ext in [".cc", ".cxx", ".c", ".h", ".hpp"]:
+        assert analyzer._detect_language(f"file{ext}") == "cpp"
+
+
+def test_detect_language_rust() -> None:
+    analyzer = DiffAnalyzer(Path())
+    assert analyzer._detect_language("lib.rs") == "rust"
+
+
+# ── Test _find_source_file ───────────────────────────────────────
+
+
+def test_find_source_file_python(tmp_path: Path) -> None:
+    """Reverse map test_foo.py -> src/foo.py."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "utils.py").write_text("def x(): pass\n")
+    analyzer = DiffAnalyzer(tmp_path)
+    source = analyzer._find_source_file("tests/test_utils.py", "python", tmp_path)
+    assert source == "src/utils.py"
+
+
+def test_find_source_file_python_root_level(tmp_path: Path) -> None:
+    """Reverse map test_foo.py -> foo.py."""
+    (tmp_path / "calc.py").write_text("x = 1\n")
+    analyzer = DiffAnalyzer(tmp_path)
+    source = analyzer._find_source_file("test_calc.py", "python", tmp_path)
+    assert source is not None
+
+
+def test_find_source_file_js(tmp_path: Path) -> None:
+    """Reverse map foo.test.ts -> src/foo.ts."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "helper.ts").write_text("export {};\n")
+    analyzer = DiffAnalyzer(tmp_path)
+    source = analyzer._find_source_file("helper.test.ts", "javascript", tmp_path)
+    assert source is not None
+
+
+def test_find_source_file_no_match(tmp_path: Path) -> None:
+    """Return None for unresolvable test files."""
+    analyzer = DiffAnalyzer(tmp_path)
+    source = analyzer._find_source_file("test_missing.py", "python", tmp_path)
+    assert source is None
+
+
+def test_find_source_file_unsupported_lang(tmp_path: Path) -> None:
+    """Unsupported language returns None."""
+    analyzer = DiffAnalyzer(tmp_path)
+    source = analyzer._find_source_file("file_test.java", "java", tmp_path)
+    assert source is None
+
+
+# ── Test _generate_test_path for no patterns ─────────────────────
+
+
+def test_generate_test_path_no_language() -> None:
+    """Unknown language returns None."""
+    analyzer = DiffAnalyzer(Path())
+    assert analyzer._generate_test_path("file.unknown", "unknown_lang") is None
+
+
+# ── Test _get_untracked_files ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_diff_analyzer_untracked(git_repo_with_files: Path) -> None:
+    """Test inclusion of untracked files."""
+    (git_repo_with_files / "untracked_new.py").write_text("x = 1\n")
+    analyzer = DiffAnalyzer(git_repo_with_files)
+    task = DiffAnalysisTask(
+        project_root=str(git_repo_with_files),
+        include_untracked=True,
+    )
+    result = await analyzer.run(task)
+    assert result.status == TaskStatus.COMPLETED
+    diff_result = result.result["diff_result"]
+    all_paths = [f.path for f in diff_result.changed_files]
+    assert "untracked_new.py" in all_paths
+
+
+# ── Test _find_test_file with existing patterns ──────────────────
+
+
+def test_find_test_file_exists(git_repo_with_files: Path) -> None:
+    """Test finding an existing test file for a source file."""
+    analyzer = DiffAnalyzer(git_repo_with_files)
+    result = analyzer._find_test_file("src/helper.ts", "javascript", git_repo_with_files)
+    assert result is not None
+    assert "test" in result
+
+
+# ── Test data model defaults ─────────────────────────────────────
+
+
+def test_file_change_defaults() -> None:
+    fc = FileChange(path="x.py", change_type=ChangeType.ADDED)
+    assert fc.old_path is None
+    assert fc.lines_added == 0
+    assert fc.lines_removed == 0
+
+
+def test_file_mapping_defaults() -> None:
+    fm = FileMapping(source_file="x.py", test_file="test_x.py")
+    assert not fm.exists
+
+
+def test_diff_analysis_result_defaults() -> None:
+    r = DiffAnalysisResult()
+    assert r.changed_files == []
+    assert r.total_lines_added == 0

@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
-from unittest.mock import MagicMock
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import MagicMock, Mock, patch
 
 from nit.adapters.base import DocFrameworkAdapter, TestFrameworkAdapter, ValidationResult
 from nit.adapters.registry import AdapterRegistry, get_registry
@@ -14,6 +13,14 @@ from nit.agents.detectors.signals import DetectedFramework, FrameworkCategory
 from nit.agents.detectors.workspace import PackageInfo
 from nit.llm.prompts.base import PromptTemplate
 from nit.models.profile import ProjectProfile
+
+
+def _write_file(root: Path, rel: str, content: str) -> None:
+    """Write *content* to a file under *root*."""
+    f = root / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(content, encoding="utf-8")
+
 
 # ── Mock Adapters ────────────────────────────────────────────────────
 
@@ -174,12 +181,14 @@ def test_get_nonexistent_adapter() -> None:
     assert adapter is None
 
 
-def test_get_doc_adapter_when_none_registered() -> None:
-    """Test doc adapter retrieval when no doc adapters exist."""
+def test_get_doc_adapter() -> None:
+    """Test doc adapter retrieval: existing adapter returned, nonexistent returns None."""
     registry = AdapterRegistry()
-    # Should return None since we haven't implemented doc adapters yet
-    adapter = registry.get_doc_adapter("sphinx")
-    assert adapter is None
+    adapter = registry.get_doc_adapter("typedoc")
+    assert adapter is not None
+    assert adapter.name == "typedoc"
+    nonexistent = registry.get_doc_adapter("nonexistent_doc_framework")
+    assert nonexistent is None
 
 
 def test_list_adapters() -> None:
@@ -196,7 +205,9 @@ def test_list_adapters() -> None:
 
     doc_adapters = registry.list_doc_adapters()
     assert isinstance(doc_adapters, list)
-    # Currently no doc adapters implemented
+    assert len(doc_adapters) > 0
+    assert "typedoc" in doc_adapters
+    assert "jsdoc" in doc_adapters
 
 
 def test_select_adapters_for_single_repo(tmp_path: Path) -> None:
@@ -447,3 +458,775 @@ def test_frameworks_by_category_filtering(tmp_path: Path) -> None:
     adapter_names = {a.name for a in adapters}
     assert "pytest" in adapter_names
     # Playwright adapter doesn't exist yet, so won't be selected
+
+
+# ── Entry Point Discovery Tests ─────────────────────────────────────
+
+
+class CustomTestAdapter(TestFrameworkAdapter):
+    """Custom test adapter for entry point testing."""
+
+    @property
+    def name(self) -> str:
+        return "custom"
+
+    @property
+    def language(self) -> str:
+        return "python"
+
+    def detect(self, project_path: Path) -> bool:
+        return True
+
+    def get_test_pattern(self) -> list[str]:
+        return ["**/*_custom.py"]
+
+    def get_prompt_template(self) -> PromptTemplate:
+        return MagicMock(spec=PromptTemplate)
+
+    async def run_tests(
+        self,
+        project_path: Path,
+        *,
+        test_files: list[Path] | None = None,
+        timeout: float = 120.0,
+    ) -> MagicMock:
+        return MagicMock()
+
+    def validate_test(self, test_code: str) -> ValidationResult:
+        return ValidationResult(valid=True)
+
+
+class CustomDocAdapter(DocFrameworkAdapter):
+    """Custom doc adapter for entry point testing."""
+
+    @property
+    def name(self) -> str:
+        return "customdoc"
+
+    @property
+    def language(self) -> str:
+        return "python"
+
+    def detect(self, project_path: Path) -> bool:
+        return True
+
+    def get_doc_pattern(self) -> list[str]:
+        return ["docs/**/*.txt"]
+
+    def get_prompt_template(self) -> PromptTemplate:
+        return MagicMock(spec=PromptTemplate)
+
+    async def build_docs(
+        self,
+        project_path: Path,
+        *,
+        timeout: float = 120.0,
+    ) -> bool:
+        return True
+
+    def validate_doc(self, doc_code: str) -> ValidationResult:
+        return ValidationResult(valid=True)
+
+
+def test_entry_point_discovery_test_adapter() -> None:
+    """Test that test adapters can be loaded from entry points."""
+    # Create a mock entry point
+    mock_entry_point = Mock()
+    mock_entry_point.name = "custom"
+    mock_entry_point.load.return_value = CustomTestAdapter
+
+    # Patch entry_points to return our mock
+    with patch("importlib.metadata.entry_points") as mock_entry_points:
+        mock_entry_points.return_value = [mock_entry_point]
+
+        # Create registry (which will discover entry points)
+        registry = AdapterRegistry()
+
+        # Verify the custom adapter was registered
+        assert "custom" in registry.list_test_adapters()
+        adapter = registry.get_test_adapter("custom")
+        assert adapter is not None
+        assert adapter.name == "custom"
+
+
+def test_entry_point_discovery_doc_adapter() -> None:
+    """Test that doc adapters can be loaded from entry points."""
+    # Create a mock entry point
+    mock_entry_point = Mock()
+    mock_entry_point.name = "customdoc"
+    mock_entry_point.load.return_value = CustomDocAdapter
+
+    # Patch entry_points to return our mock
+    with patch("importlib.metadata.entry_points") as mock_entry_points:
+
+        def entry_points_side_effect(group: str) -> list[Mock]:
+            if group == "nit.adapters.docs":
+                return [mock_entry_point]
+            return []
+
+        mock_entry_points.side_effect = entry_points_side_effect
+
+        # Create registry
+        registry = AdapterRegistry()
+
+        # Verify the custom doc adapter was registered
+        assert "customdoc" in registry.list_doc_adapters()
+        adapter = registry.get_doc_adapter("customdoc")
+        assert adapter is not None
+        assert adapter.name == "customdoc"
+
+
+def test_entry_point_conflict_resolution() -> None:
+    """Test that entry points don't overwrite built-in adapters."""
+    # Create a mock entry point with same name as built-in
+    mock_entry_point = Mock()
+    mock_entry_point.name = "pytest"  # Conflicts with built-in pytest
+    mock_entry_point.load.return_value = CustomTestAdapter
+
+    with patch("importlib.metadata.entry_points") as mock_entry_points:
+
+        def entry_points_side_effect(group: str) -> list[Mock]:
+            if group == "nit.adapters.unit":
+                return [mock_entry_point]
+            return []
+
+        mock_entry_points.side_effect = entry_points_side_effect
+
+        # Create registry
+        registry = AdapterRegistry()
+
+        # Verify the built-in pytest adapter is still there (not overwritten)
+        adapter = registry.get_test_adapter("pytest")
+        assert adapter is not None
+        assert adapter.name == "pytest"
+        # Should be the built-in pytest adapter, not CustomTestAdapter
+        assert adapter.language == "python"
+
+
+def test_entry_point_invalid_class() -> None:
+    """Test that non-class entry points are rejected."""
+    # Create a mock entry point that returns a string instead of a class
+    mock_entry_point = Mock()
+    mock_entry_point.name = "invalid"
+    mock_entry_point.load.return_value = "not a class"
+
+    with patch("importlib.metadata.entry_points") as mock_entry_points:
+        mock_entry_points.return_value = [mock_entry_point]
+
+        # Create registry (should not crash)
+        registry = AdapterRegistry()
+
+        # Verify the invalid adapter was not registered
+        assert "invalid" not in registry.list_test_adapters()
+
+
+def test_entry_point_wrong_base_class() -> None:
+    """Test that entry points with wrong base class are rejected."""
+
+    # Create a class that doesn't inherit from TestFrameworkAdapter
+    class WrongBaseClass:
+        pass
+
+    mock_entry_point = Mock()
+    mock_entry_point.name = "wrongbase"
+    mock_entry_point.load.return_value = WrongBaseClass
+
+    with patch("importlib.metadata.entry_points") as mock_entry_points:
+        mock_entry_points.return_value = [mock_entry_point]
+
+        # Create registry
+        registry = AdapterRegistry()
+
+        # Verify the wrong-base adapter was not registered
+        assert "wrongbase" not in registry.list_test_adapters()
+
+
+def test_entry_point_instantiation_error() -> None:
+    """Test that entry points that fail to instantiate are handled gracefully."""
+
+    # Create a class that raises an error when instantiated
+    class BadAdapter(TestFrameworkAdapter):
+        def __init__(self) -> None:
+            raise RuntimeError("Cannot instantiate")
+
+        @property
+        def name(self) -> str:
+            return "bad"
+
+        @property
+        def language(self) -> str:
+            return "python"
+
+        def detect(self, project_path: Path) -> bool:
+            return True
+
+        def get_test_pattern(self) -> list[str]:
+            return []
+
+        def get_prompt_template(self) -> PromptTemplate:
+            return MagicMock(spec=PromptTemplate)
+
+        async def run_tests(
+            self,
+            project_path: Path,
+            *,
+            test_files: list[Path] | None = None,
+            timeout: float = 120.0,
+        ) -> MagicMock:
+            return MagicMock()
+
+        def validate_test(self, test_code: str) -> ValidationResult:
+            return ValidationResult(valid=True)
+
+    mock_entry_point = Mock()
+    mock_entry_point.name = "bad"
+    mock_entry_point.load.return_value = BadAdapter
+
+    with patch("importlib.metadata.entry_points") as mock_entry_points:
+        mock_entry_points.return_value = [mock_entry_point]
+
+        # Create registry (should not crash)
+        registry = AdapterRegistry()
+
+        # Verify the bad adapter was not registered
+        assert "bad" not in registry.list_test_adapters()
+
+
+def test_entry_point_load_error() -> None:
+    """Test that entry points that fail to load are handled gracefully."""
+    mock_entry_point = Mock()
+    mock_entry_point.name = "loadfail"
+    mock_entry_point.load.side_effect = ImportError("Cannot load module")
+
+    with patch("importlib.metadata.entry_points") as mock_entry_points:
+        mock_entry_points.return_value = [mock_entry_point]
+
+        # Create registry (should not crash)
+        registry = AdapterRegistry()
+
+        # Verify the failed adapter was not registered
+        assert "loadfail" not in registry.list_test_adapters()
+
+
+def test_multiple_entry_points() -> None:
+    """Test that multiple entry points can be loaded at once."""
+
+    # Create two custom adapters
+    class CustomAdapter1(TestFrameworkAdapter):
+        @property
+        def name(self) -> str:
+            return "custom1"
+
+        @property
+        def language(self) -> str:
+            return "python"
+
+        def detect(self, project_path: Path) -> bool:
+            return True
+
+        def get_test_pattern(self) -> list[str]:
+            return ["**/*_test1.py"]
+
+        def get_prompt_template(self) -> PromptTemplate:
+            return MagicMock(spec=PromptTemplate)
+
+        async def run_tests(
+            self,
+            project_path: Path,
+            *,
+            test_files: list[Path] | None = None,
+            timeout: float = 120.0,
+        ) -> MagicMock:
+            return MagicMock()
+
+        def validate_test(self, test_code: str) -> ValidationResult:
+            return ValidationResult(valid=True)
+
+    class CustomAdapter2(TestFrameworkAdapter):
+        @property
+        def name(self) -> str:
+            return "custom2"
+
+        @property
+        def language(self) -> str:
+            return "typescript"
+
+        def detect(self, project_path: Path) -> bool:
+            return True
+
+        def get_test_pattern(self) -> list[str]:
+            return ["**/*_test2.ts"]
+
+        def get_prompt_template(self) -> PromptTemplate:
+            return MagicMock(spec=PromptTemplate)
+
+        async def run_tests(
+            self,
+            project_path: Path,
+            *,
+            test_files: list[Path] | None = None,
+            timeout: float = 120.0,
+        ) -> MagicMock:
+            return MagicMock()
+
+        def validate_test(self, test_code: str) -> ValidationResult:
+            return ValidationResult(valid=True)
+
+    mock_ep1 = Mock()
+    mock_ep1.name = "custom1"
+    mock_ep1.load.return_value = CustomAdapter1
+
+    mock_ep2 = Mock()
+    mock_ep2.name = "custom2"
+    mock_ep2.load.return_value = CustomAdapter2
+
+    with patch("importlib.metadata.entry_points") as mock_entry_points:
+        mock_entry_points.return_value = [mock_ep1, mock_ep2]
+
+        # Create registry
+        registry = AdapterRegistry()
+
+        # Verify both adapters were registered
+        assert "custom1" in registry.list_test_adapters()
+        assert "custom2" in registry.list_test_adapters()
+
+        adapter1 = registry.get_test_adapter("custom1")
+        assert adapter1 is not None
+        assert adapter1.name == "custom1"
+
+        adapter2 = registry.get_test_adapter("custom2")
+        assert adapter2 is not None
+        assert adapter2.name == "custom2"
+
+
+def test_entry_points_mixed_with_builtins() -> None:
+    """Test that entry point adapters work alongside built-in adapters."""
+
+    class CustomMixedAdapter(TestFrameworkAdapter):
+        @property
+        def name(self) -> str:
+            return "custommixed"
+
+        @property
+        def language(self) -> str:
+            return "python"
+
+        def detect(self, project_path: Path) -> bool:
+            return True
+
+        def get_test_pattern(self) -> list[str]:
+            return ["**/*_mixed.py"]
+
+        def get_prompt_template(self) -> PromptTemplate:
+            return MagicMock(spec=PromptTemplate)
+
+        async def run_tests(
+            self,
+            project_path: Path,
+            *,
+            test_files: list[Path] | None = None,
+            timeout: float = 120.0,
+        ) -> MagicMock:
+            return MagicMock()
+
+        def validate_test(self, test_code: str) -> ValidationResult:
+            return ValidationResult(valid=True)
+
+    mock_entry_point = Mock()
+    mock_entry_point.name = "custommixed"
+    mock_entry_point.load.return_value = CustomMixedAdapter
+
+    with patch("importlib.metadata.entry_points") as mock_entry_points:
+
+        def entry_points_side_effect(group: str) -> list[Mock]:
+            if group == "nit.adapters.unit":
+                return [mock_entry_point]
+            return []
+
+        mock_entry_points.side_effect = entry_points_side_effect
+
+        # Create registry
+        registry = AdapterRegistry()
+
+        # Verify both custom and built-in adapters are available
+        adapters = registry.list_test_adapters()
+        assert "custommixed" in adapters  # Custom adapter
+        assert "pytest" in adapters  # Built-in adapter
+        assert "vitest" in adapters  # Built-in adapter
+
+        # Verify both can be retrieved
+        custom = registry.get_test_adapter("custommixed")
+        assert custom is not None
+        assert custom.name == "custommixed"
+
+        builtin = registry.get_test_adapter("pytest")
+        assert builtin is not None
+        assert builtin.name == "pytest"
+
+
+# ── Coverage gap tests: error handling in discovery, get_*_adapter ────
+
+
+def test_discover_test_adapters_import_error() -> None:
+    """_discover_test_adapters handles module import failure."""
+    registry = AdapterRegistry.__new__(AdapterRegistry)
+    registry._test_adapters = {}
+    registry._doc_adapters = {}
+
+    with patch("pkgutil.iter_modules") as mock_iter:
+        mock_iter.return_value = [(None, "bad_adapter", False)]
+        with patch("importlib.import_module", side_effect=ImportError("boom")):
+            registry._discover_test_adapters()
+    # Should not crash, and no adapters registered
+    assert "bad_adapter" not in registry._test_adapters
+
+
+def test_discover_e2e_adapters_import_error() -> None:
+    """_discover_e2e_adapters handles module import failure."""
+    registry = AdapterRegistry.__new__(AdapterRegistry)
+    registry._test_adapters = {}
+    registry._doc_adapters = {}
+
+    with patch("pkgutil.iter_modules") as mock_iter:
+        mock_iter.return_value = [(None, "fail_adapter", False)]
+        with patch("importlib.import_module", side_effect=ImportError("boom")):
+            registry._discover_e2e_adapters()
+    assert "fail_adapter" not in registry._test_adapters
+
+
+def test_discover_doc_adapters_import_error() -> None:
+    """_discover_doc_adapters handles module import failure."""
+    registry = AdapterRegistry.__new__(AdapterRegistry)
+    registry._test_adapters = {}
+    registry._doc_adapters = {}
+
+    with patch("pkgutil.iter_modules") as mock_iter:
+        mock_iter.return_value = [(None, "bad_doc_adapter", False)]
+        with patch("importlib.import_module", side_effect=ImportError("boom")):
+            registry._discover_doc_adapters()
+    assert "bad_doc_adapter" not in registry._doc_adapters
+
+
+def test_discover_test_adapters_skips_non_adapter_modules() -> None:
+    """_discover_test_adapters skips modules not ending with _adapter."""
+    registry = AdapterRegistry.__new__(AdapterRegistry)
+    registry._test_adapters = {}
+    registry._doc_adapters = {}
+
+    with patch("pkgutil.iter_modules") as mock_iter:
+        mock_iter.return_value = [
+            (None, "_private", False),
+            (None, "helper_module", False),
+        ]
+        registry._discover_test_adapters()
+    assert len(registry._test_adapters) == 0
+
+
+def test_discover_test_adapters_package_import_error() -> None:
+    """_discover_test_adapters handles package-level import failure."""
+    registry = AdapterRegistry.__new__(AdapterRegistry)
+    registry._test_adapters = {}
+    registry._doc_adapters = {}
+
+    with patch("pkgutil.iter_modules", side_effect=ImportError("no pkg")):
+        registry._discover_test_adapters()
+    assert len(registry._test_adapters) == 0
+
+
+def test_discover_e2e_adapters_package_import_error() -> None:
+    """_discover_e2e_adapters handles package-level import failure."""
+    registry = AdapterRegistry.__new__(AdapterRegistry)
+    registry._test_adapters = {}
+    registry._doc_adapters = {}
+
+    with patch("pkgutil.iter_modules", side_effect=ImportError("no pkg")):
+        registry._discover_e2e_adapters()
+    assert len(registry._test_adapters) == 0
+
+
+def test_get_test_adapter_instantiation_error() -> None:
+    """get_test_adapter returns None when adapter raises on instantiation."""
+
+    class BrokenAdapter(TestFrameworkAdapter):
+        def __init__(self) -> None:
+            raise RuntimeError("broken")
+
+        @property
+        def name(self) -> str:
+            return "broken"
+
+        @property
+        def language(self) -> str:
+            return "python"
+
+        def detect(self, project_path: Path) -> bool:
+            return True
+
+        def get_test_pattern(self) -> list[str]:
+            return []
+
+        def get_prompt_template(self) -> PromptTemplate:
+            return MagicMock(spec=PromptTemplate)
+
+        async def run_tests(
+            self,
+            project_path: Path,
+            *,
+            test_files: list[Path] | None = None,
+            timeout: float = 120.0,
+        ) -> MagicMock:
+            return MagicMock()
+
+        def validate_test(self, test_code: str) -> ValidationResult:
+            return ValidationResult(valid=True)
+
+    registry = AdapterRegistry()
+    registry._test_adapters["broken"] = BrokenAdapter
+    result = registry.get_test_adapter("broken")
+    assert result is None
+
+
+def test_get_doc_adapter_instantiation_error() -> None:
+    """get_doc_adapter returns None when adapter raises on instantiation."""
+
+    class BrokenDocAdapter(DocFrameworkAdapter):
+        def __init__(self) -> None:
+            raise RuntimeError("broken")
+
+        @property
+        def name(self) -> str:
+            return "brokendoc"
+
+        @property
+        def language(self) -> str:
+            return "python"
+
+        def detect(self, project_path: Path) -> bool:
+            return True
+
+        def get_doc_pattern(self) -> list[str]:
+            return []
+
+        def get_prompt_template(self) -> PromptTemplate:
+            return MagicMock(spec=PromptTemplate)
+
+        async def build_docs(
+            self,
+            project_path: Path,
+            *,
+            timeout: float = 120.0,
+        ) -> bool:
+            return True
+
+        def validate_doc(self, doc_code: str) -> ValidationResult:
+            return ValidationResult(valid=True)
+
+    registry = AdapterRegistry()
+    registry._doc_adapters["brokendoc"] = BrokenDocAdapter
+    result = registry.get_doc_adapter("brokendoc")
+    assert result is None
+
+
+def test_register_adapter_instantiation_error_test() -> None:
+    """_register_adapters_from_module handles test adapter instantiation error."""
+
+    class FailingAdapter(TestFrameworkAdapter):
+        def __init__(self) -> None:
+            raise RuntimeError("cannot init")
+
+        @property
+        def name(self) -> str:
+            return "failing"
+
+        @property
+        def language(self) -> str:
+            return "python"
+
+        def detect(self, project_path: Path) -> bool:
+            return True
+
+        def get_test_pattern(self) -> list[str]:
+            return []
+
+        def get_prompt_template(self) -> PromptTemplate:
+            return MagicMock(spec=PromptTemplate)
+
+        async def run_tests(
+            self,
+            project_path: Path,
+            *,
+            test_files: list[Path] | None = None,
+            timeout: float = 120.0,
+        ) -> MagicMock:
+            return MagicMock()
+
+        def validate_test(self, test_code: str) -> ValidationResult:
+            return ValidationResult(valid=True)
+
+    module = SimpleNamespace(FailingAdapter=FailingAdapter)
+
+    registry = AdapterRegistry.__new__(AdapterRegistry)
+    registry._test_adapters = {}
+    registry._doc_adapters = {}
+    registry._register_adapters_from_module(module, "test")
+    assert "failing" not in registry._test_adapters
+
+
+def test_register_adapter_instantiation_error_doc() -> None:
+    """_register_adapters_from_module handles doc adapter instantiation error."""
+
+    class FailingDocAdapter(DocFrameworkAdapter):
+        def __init__(self) -> None:
+            raise RuntimeError("cannot init")
+
+        @property
+        def name(self) -> str:
+            return "failingdoc"
+
+        @property
+        def language(self) -> str:
+            return "python"
+
+        def detect(self, project_path: Path) -> bool:
+            return True
+
+        def get_doc_pattern(self) -> list[str]:
+            return []
+
+        def get_prompt_template(self) -> PromptTemplate:
+            return MagicMock(spec=PromptTemplate)
+
+        async def build_docs(
+            self,
+            project_path: Path,
+            *,
+            timeout: float = 120.0,
+        ) -> bool:
+            return True
+
+        def validate_doc(self, doc_code: str) -> ValidationResult:
+            return ValidationResult(valid=True)
+
+    module = SimpleNamespace(FailingDocAdapter=FailingDocAdapter)
+
+    registry = AdapterRegistry.__new__(AdapterRegistry)
+    registry._test_adapters = {}
+    registry._doc_adapters = {}
+    registry._register_adapters_from_module(module, "doc")
+    assert "failingdoc" not in registry._doc_adapters
+
+
+def test_entry_point_doc_conflict_resolution() -> None:
+    """Doc entry points don't overwrite built-in doc adapters."""
+    mock_entry_point = Mock()
+    mock_entry_point.name = "sphinx"  # Conflicts with built-in
+    mock_entry_point.load.return_value = CustomDocAdapter
+
+    with patch("importlib.metadata.entry_points") as mock_entry_points:
+
+        def ep_side_effect(group: str) -> list[Mock]:
+            if group == "nit.adapters.docs":
+                return [mock_entry_point]
+            return []
+
+        mock_entry_points.side_effect = ep_side_effect
+        registry = AdapterRegistry()
+
+    # Built-in sphinx adapter should still be there
+    adapter = registry.get_doc_adapter("sphinx")
+    assert adapter is not None
+
+
+def test_entry_point_doc_wrong_base_class() -> None:
+    """Doc entry points with wrong base class are rejected."""
+
+    class WrongBase:
+        pass
+
+    mock_entry_point = Mock()
+    mock_entry_point.name = "wrongdoc"
+    mock_entry_point.load.return_value = WrongBase
+
+    with patch("importlib.metadata.entry_points") as mock_entry_points:
+
+        def ep_side_effect(group: str) -> list[Mock]:
+            if group == "nit.adapters.docs":
+                return [mock_entry_point]
+            return []
+
+        mock_entry_points.side_effect = ep_side_effect
+        registry = AdapterRegistry()
+
+    assert "wrongdoc" not in registry.list_doc_adapters()
+
+
+def test_entry_point_doc_instantiation_error() -> None:
+    """Doc entry points that fail to instantiate are handled."""
+
+    class FailDocEP(DocFrameworkAdapter):
+        def __init__(self) -> None:
+            raise RuntimeError("boom")
+
+        @property
+        def name(self) -> str:
+            return "faildoc"
+
+        @property
+        def language(self) -> str:
+            return "python"
+
+        def detect(self, project_path: Path) -> bool:
+            return True
+
+        def get_doc_pattern(self) -> list[str]:
+            return []
+
+        def get_prompt_template(self) -> PromptTemplate:
+            return MagicMock(spec=PromptTemplate)
+
+        async def build_docs(self, project_path: Path, *, timeout: float = 120.0) -> bool:
+            return True
+
+        def validate_doc(self, doc_code: str) -> ValidationResult:
+            return ValidationResult(valid=True)
+
+    mock_entry_point = Mock()
+    mock_entry_point.name = "faildoc"
+    mock_entry_point.load.return_value = FailDocEP
+
+    with patch("importlib.metadata.entry_points") as mock_entry_points:
+
+        def ep_side_effect(group: str) -> list[Mock]:
+            if group == "nit.adapters.docs":
+                return [mock_entry_point]
+            return []
+
+        mock_entry_points.side_effect = ep_side_effect
+        registry = AdapterRegistry()
+
+    assert "faildoc" not in registry.list_doc_adapters()
+
+
+def test_select_adapters_doc_adapter_detected(tmp_path: Path) -> None:
+    """select_adapters_for_profile selects doc adapters when detected."""
+    registry = AdapterRegistry()
+
+    # Set up Sphinx detection
+    _write_file(tmp_path, "docs/conf.py", "# Sphinx config\n")
+
+    profile = ProjectProfile(
+        root=str(tmp_path),
+        frameworks=[
+            DetectedFramework(
+                name="sphinx",
+                language="python",
+                category=FrameworkCategory.DOC,
+                confidence=0.9,
+            ),
+        ],
+        packages=[],
+    )
+
+    selected = registry.select_adapters_for_profile(profile)
+    adapters = selected.get(str(tmp_path), [])
+    assert any(a.name == "sphinx" for a in adapters)

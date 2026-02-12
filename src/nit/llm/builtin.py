@@ -33,9 +33,11 @@ from nit.llm.engine import (
     LLMResponse,
 )
 from nit.llm.usage_callback import (
+    MetadataParams,
     build_litellm_metadata,
     ensure_nit_usage_callback_registered,
 )
+from nit.utils.cache import MemoryCache, content_hash
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +68,29 @@ class RateLimitConfig:
 
     requests_per_minute: int = 60
     """Maximum requests allowed per minute."""
+
+
+@dataclass
+class BuiltinLLMConfig:
+    """Configuration for ``BuiltinLLM``."""
+
+    model: str
+    """LiteLLM model string (e.g. ``"gpt-4o"``, ``"claude-sonnet-4-5-20250514"``)."""
+
+    provider: str | None = None
+    """Optional LLM provider override."""
+
+    api_key: str | None = None
+    """Optional API key for the provider."""
+
+    base_url: str | None = None
+    """Optional base URL for the API endpoint."""
+
+    retry: RetryConfig = field(default_factory=RetryConfig)
+    """Retry configuration for transient failures."""
+
+    rate_limit: RateLimitConfig = field(default_factory=RateLimitConfig)
+    """Rate limiter configuration."""
 
 
 @dataclass
@@ -105,23 +130,16 @@ class BuiltinLLM(LLMEngine):
     (e.g. ``"gpt-4o"``, ``"claude-sonnet-4-5-20250514"``, ``"ollama/codellama"``).
     """
 
-    def __init__(  # noqa: PLR0913
-        self,
-        model: str,
-        *,
-        provider: str | None = None,
-        api_key: str | None = None,
-        base_url: str | None = None,
-        retry: RetryConfig | None = None,
-        rate_limit: RateLimitConfig | None = None,
-    ) -> None:
-        self._model = model
-        self._provider = provider
-        self._api_key = api_key
-        self._base_url = base_url
-        self._retry = retry or RetryConfig()
-        rate_cfg = rate_limit or RateLimitConfig()
-        self._bucket = _TokenBucket(capacity=rate_cfg.requests_per_minute)
+    def __init__(self, config: BuiltinLLMConfig) -> None:
+        self._model = config.model
+        self._provider = config.provider
+        self._api_key = config.api_key
+        self._base_url = config.base_url
+        self._retry = config.retry
+        self._bucket = _TokenBucket(capacity=config.rate_limit.requests_per_minute)
+        self._response_cache: MemoryCache[LLMResponse] = MemoryCache(
+            max_size=128, ttl_seconds=1800.0
+        )
         ensure_nit_usage_callback_registered()
 
     # ── Public API ────────────────────────────────────────────────
@@ -131,6 +149,13 @@ class BuiltinLLM(LLMEngine):
         return self._model
 
     async def generate(self, request: GenerationRequest) -> LLMResponse:
+        # Check response cache first
+        cache_key = self._build_cache_key(request)
+        cached = self._response_cache.get(cache_key)
+        if cached is not None:
+            logger.debug("LLM cache hit for key %s", cache_key[:8])
+            return cached
+
         model = request.model or self._model
         messages = [{"role": m.role, "content": m.content} for m in request.messages]
         extra = dict(request.extra)
@@ -146,12 +171,14 @@ class BuiltinLLM(LLMEngine):
         emit_usage = usage_source != "api"
 
         metadata = build_litellm_metadata(
-            source=usage_source,
-            mode="builtin",
-            provider=self._provider,
-            model=model,
-            emit_usage=emit_usage,
-            overrides=metadata_overrides or None,
+            MetadataParams(
+                source=usage_source,
+                mode="builtin",
+                provider=self._provider,
+                model=model,
+                emit_usage=emit_usage,
+                overrides=metadata_overrides or None,
+            )
         )
 
         kwargs: dict[str, Any] = {
@@ -166,9 +193,8 @@ class BuiltinLLM(LLMEngine):
         if self._base_url:
             kwargs["api_base"] = self._base_url
 
-        user_id = metadata.get("nit_user_id")
-        if isinstance(user_id, str) and user_id and "user" not in extra:
-            kwargs["user"] = user_id
+        # Note: user_id is extracted from the token on the backend (if proxying)
+        # LLM providers can use the token to identify users for rate limiting
 
         extra_headers_raw = extra.pop("extra_headers", None)
         extra_headers: dict[str, Any] = (
@@ -187,7 +213,9 @@ class BuiltinLLM(LLMEngine):
         kwargs.update(extra)
 
         raw = await self._call_with_retry(kwargs)
-        return self._parse_response(raw, model)
+        response = self._parse_response(raw, model)
+        self._response_cache.put(cache_key, response)
+        return response
 
     async def generate_text(self, prompt: str, *, context: str = "") -> str:
         messages: list[LLMMessage] = []
@@ -197,6 +225,14 @@ class BuiltinLLM(LLMEngine):
 
         response = await self.generate(GenerationRequest(messages=messages))
         return response.text
+
+    # ── Cache key ─────────────────────────────────────────────────
+
+    def _build_cache_key(self, request: GenerationRequest) -> str:
+        """Build a deterministic cache key from the generation request."""
+        model = request.model or self._model
+        msg_content = "|".join(f"{m.role}:{m.content}" for m in request.messages)
+        return content_hash(f"{model}:{request.temperature}:{msg_content}")
 
     # ── Token counting ────────────────────────────────────────────
 

@@ -68,7 +68,7 @@ class GoCoverAdapter(CoverageAdapter):
                 try:
                     rel = f.parent.relative_to(project_path)
                     pkgs.add("." if not rel.parts else f"./{rel}")
-                except ValueError, TypeError:
+                except (ValueError, TypeError):
                     continue
             pkg_list = sorted(pkgs) if pkgs else ["./..."]
         else:

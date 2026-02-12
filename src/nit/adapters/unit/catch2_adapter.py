@@ -20,6 +20,7 @@ from nit.adapters.base import (
     TestFrameworkAdapter,
     ValidationResult,
 )
+from nit.adapters.coverage.gcov import GcovAdapter
 from nit.llm.prompts.catch2_prompt import Catch2Template
 from nit.parsing.treesitter import (
     collect_error_ranges,
@@ -87,20 +88,6 @@ _TEST_SUMMARY_RE = re.compile(
 
 _XML_ATTR_REGEX = re.compile(r'(?P<name>[A-Za-z0-9_:-]+)="(?P<value>[^"]*)"')
 _XML_TESTCASE_REGEX = re.compile(
-    r"<testcase\b(?P<attrs>[^>]*)(?:(?P<self>/>)|>(?P<body>.*?)</testcase>)",
-    flags=re.DOTALL,
-)
-_XML_FAILURE_REGEX = re.compile(
-    r"<failure\b(?P<attrs>[^>]*)>(?P<body>.*?)</failure>",
-    flags=re.DOTALL,
-)
-_XML_ERROR_REGEX = re.compile(
-    r"<error\b(?P<attrs>[^>]*)>(?P<body>.*?)</error>",
-    flags=re.DOTALL,
-)
-
-_XML_ATTR_REGEX = re.compile(r'(?P<name>[A-Za-z0-9_:-]+)="(?P<value>[^"]*)"')
-_XML_TESTCASE_REGEX = re.compile(
     r"<testcase\b(?P<attrs>.*?)(?:(?P<self>\s*/>)|>(?P<body>.*?)</testcase>)",
     flags=re.DOTALL,
 )
@@ -154,8 +141,12 @@ class Catch2Adapter(TestFrameworkAdapter):
         *,
         test_files: list[Path] | None = None,
         timeout: float = _DEFAULT_TIMEOUT,
+        collect_coverage: bool = True,
     ) -> RunResult:
-        """Execute Catch2 via CMake/CTest, with direct binary fallback."""
+        """Execute Catch2 via CMake/CTest, with direct binary fallback.
+
+        Optionally collects coverage using GcovAdapter.
+        """
         output_parts: list[str] = []
 
         with tempfile.TemporaryDirectory(prefix="nit_catch2_") as temp_dir:
@@ -174,12 +165,25 @@ class Catch2Adapter(TestFrameworkAdapter):
 
             discovered = _discover_catch2_binaries(project_path, build_dir)
             binaries = _select_binaries(discovered, test_files)
-            return await _run_direct_binaries(
+            result = await _run_direct_binaries(
                 binaries=binaries,
                 report_dir=report_dir,
                 timeout=timeout,
                 output_parts=output_parts,
             )
+
+            # Collect coverage if requested
+            if collect_coverage and result.success:
+                try:
+                    coverage_adapter = GcovAdapter()
+                    coverage_report = await coverage_adapter.run_coverage(
+                        project_path, test_files=test_files, timeout=timeout
+                    )
+                    result.coverage = coverage_report
+                except Exception as e:
+                    logger.warning("Failed to collect coverage: %s", e)
+
+            return result
 
     def validate_test(self, test_code: str) -> ValidationResult:
         """Parse *test_code* as C++ with tree-sitter and report syntax errors."""
@@ -303,7 +307,6 @@ async def _run_via_ctest(
 
 
 async def _run_direct_binaries(
-    *,
     binaries: list[Path],
     report_dir: Path,
     timeout: float,
@@ -343,6 +346,7 @@ async def _run_direct_binaries(
 
     aggregate.raw_output = "\n\n".join(output_parts)
     aggregate.success = aggregate.failed == 0 and aggregate.errors == 0 and aggregate.total > 0
+
     return aggregate
 
 

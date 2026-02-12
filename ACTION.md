@@ -20,7 +20,7 @@ jobs:
       - name: Run nit
         uses: getnit-dev/nit@v1
         with:
-          mode: hunt
+          mode: pick
           llm_provider: anthropic
           llm_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
@@ -50,7 +50,7 @@ jobs:
 
       - uses: getnit-dev/nit@v1
         with:
-          mode: hunt
+          mode: pick
           llm_provider: anthropic
           llm_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           test_type: all
@@ -89,7 +89,7 @@ jobs:
 ```yaml
 - uses: getnit-dev/nit@v1
   with:
-    mode: hunt
+    mode: pick
     path: packages/backend
     llm_provider: anthropic
     llm_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -99,7 +99,7 @@ jobs:
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
-| `mode` | Operation mode: `hunt`, `run`, `drift`, `docs` | No | `hunt` |
+| `mode` | Operation mode: `pick`, `run`, `drift`, `docs` | No | `pick` |
 | `llm_provider` | LLM provider (openai, anthropic, ollama, etc.) | Yes | - |
 | `llm_model` | Model name (e.g., gpt-4o, claude-3-5-sonnet) | No | - |
 | `llm_api_key` | API key for the LLM provider | No | - |
@@ -126,7 +126,7 @@ Set up these secrets in your repository settings:
 
 ## Modes
 
-### `hunt` (Default)
+### `pick` (Default)
 Full pipeline: scan → analyze → generate → test
 - Detects your stack
 - Analyzes code for untested areas

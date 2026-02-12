@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from contextlib import suppress
 from pathlib import Path
@@ -17,6 +18,8 @@ from nit.parsing.treesitter import detect_language, parse_file
 
 if TYPE_CHECKING:
     import tree_sitter
+
+logger = logging.getLogger(__name__)
 
 
 def discover_nextjs_routes(project_root: str | Path) -> list[RouteInfo]:
@@ -180,7 +183,7 @@ def _discover_app_router(app_dir: Path, root: Path) -> list[RouteInfo]:
 
 
 def _app_file_to_route(
-    file_path: Path, app_dir: Path, root: Path, is_route_handler: bool  # noqa: FBT001
+    file_path: Path, app_dir: Path, root: Path, *, is_route_handler: bool
 ) -> RouteInfo | None:
     """Convert an app/ file to a RouteInfo."""
     # Get relative path from app directory
@@ -271,7 +274,7 @@ def _extract_api_methods_from_file(file_path: Path) -> list[HTTPMethod]:
     return methods
 
 
-def _extract_handler_info(file_path: Path, root: Path) -> RouteHandler:  # noqa: ARG001
+def _extract_handler_info(file_path: Path, _root: Path) -> RouteHandler:
     """Extract handler information from a file using tree-sitter."""
     handler = RouteHandler(
         file_path=str(file_path.absolute()),
@@ -297,16 +300,13 @@ def _extract_handler_info(file_path: Path, root: Path) -> RouteHandler:  # noqa:
         # Extract dependencies
         handler.dependencies = _extract_imports(root_node, language)
 
-    except Exception:  # noqa: S110
-        # On error, return basic handler info
-        pass
+    except Exception:
+        logger.debug("Failed to extract handler info from %s", file_path)
 
     return handler
 
 
-def _find_default_export(
-    root: tree_sitter.Node, language: str  # noqa: ARG001
-) -> dict[str, object] | None:
+def _find_default_export(root: tree_sitter.Node, _language: str) -> dict[str, object] | None:
     """Find default export in a JS/TS file."""
     # Simple text-based search for default export
     # A more robust implementation would use tree-sitter queries
@@ -327,7 +327,7 @@ def _find_default_export(
     return None
 
 
-def _extract_imports(root: tree_sitter.Node, language: str) -> list[str]:  # noqa: ARG001
+def _extract_imports(root: tree_sitter.Node, _language: str) -> list[str]:
     """Extract import statements from JS/TS file."""
     imports: list[str] = []
 

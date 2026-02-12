@@ -424,12 +424,12 @@ async def test_analyze_dom_returns_snapshot(
     """Test that DOM analysis returns a snapshot."""
     snapshot = await self_healing_engine._analyze_dom(
         _project_path=tmp_path,
-        _test_code="test code",
+        test_code="page.goto('http://localhost:3000')\npage.$('#login-button')",
     )
 
     assert isinstance(snapshot, DOMSnapshot)
-    # Mock implementation returns some default selectors
-    assert len(snapshot.selectors) > 0 or len(snapshot.test_ids) > 0
+    # Static fallback extracts selectors from test code
+    assert len(snapshot.selectors) > 0 or len(snapshot.text_content) > 0
 
 
 # ── Healing Prompt Building ──────────────────────────────────────────

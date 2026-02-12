@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from nit.agents.base import BaseAgent, TaskInput, TaskOutput, TaskStatus
 from nit.parsing.languages import extract_from_file
@@ -214,6 +214,9 @@ class CodeMap:
     has_errors: bool = False
     """Whether the file has parse errors."""
 
+    parse_result: Any = None
+    """Cached ParseResult for downstream consumers (e.g., IntegrationDepsDetector)."""
+
 
 @dataclass
 class CodeAnalysisTask(TaskInput):
@@ -347,6 +350,9 @@ class CodeAnalyzer(BaseAgent):
             imports=parse_result.imports,
             has_errors=parse_result.has_errors,
         )
+
+        # Cache parse_result for downstream consumers
+        code_map.parse_result = parse_result
 
         # Task 1.20.2: Calculate complexity for each function
         for func in parse_result.functions:

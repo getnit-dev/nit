@@ -143,7 +143,7 @@ class E2ETestTemplate(PromptTemplate):
     def name(self) -> str:
         return "e2e_test"
 
-    def _system_instruction(self, context: AssembledContext) -> str:  # noqa: ARG002
+    def _system_instruction(self, _context: AssembledContext) -> str:
         """Return the system-level instruction for E2E test generation."""
         return _E2E_SYSTEM_INSTRUCTION
 

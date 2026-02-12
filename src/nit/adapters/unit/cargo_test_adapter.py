@@ -18,6 +18,7 @@ from nit.adapters.base import (
     TestFrameworkAdapter,
     ValidationResult,
 )
+from nit.adapters.coverage.tarpaulin import TarpaulinAdapter
 from nit.llm.prompts.cargo_test_prompt import CargoTestTemplate
 from nit.parsing.treesitter import (
     collect_error_ranges,
@@ -83,8 +84,12 @@ class CargoTestAdapter(TestFrameworkAdapter):
         *,
         test_files: list[Path] | None = None,
         timeout: float = _DEFAULT_TIMEOUT,
+        collect_coverage: bool = True,
     ) -> RunResult:
-        """Execute tests via ``cargo test`` and parse pretty output."""
+        """Execute tests via ``cargo test`` and parse pretty output.
+
+        Optionally collects coverage using TarpaulinAdapter.
+        """
         cmd = ["cargo", "test", "--no-fail-fast", "--", "--nocapture"]
         if test_files:
             # Filter by test name substrings from file paths
@@ -119,7 +124,24 @@ class CargoTestAdapter(TestFrameworkAdapter):
             return RunResult(raw_output="cargo not found", success=False)
 
         raw_output = stdout_bytes.decode("utf-8", errors="replace")
-        return _parse_cargo_test_output(raw_output, proc.returncode or 0)
+        result = _parse_cargo_test_output(raw_output, proc.returncode or 0)
+
+        # Collect coverage if requested
+        if collect_coverage:
+            try:
+                coverage_adapter = TarpaulinAdapter()
+                coverage_report = await coverage_adapter.run_coverage(
+                    project_path, test_files=test_files, timeout=timeout
+                )
+                result.coverage = coverage_report
+                logger.info(
+                    "Coverage collected: %.1f%% line coverage",
+                    coverage_report.overall_line_coverage,
+                )
+            except Exception as e:
+                logger.warning("Failed to collect coverage: %s", e)
+
+        return result
 
     def validate_test(self, test_code: str) -> ValidationResult:
         """Parse *test_code* as Rust with tree-sitter and report syntax errors."""
@@ -133,6 +155,14 @@ class CargoTestAdapter(TestFrameworkAdapter):
         error_ranges = collect_error_ranges(root)
         errors = [f"Syntax error at line {start}-{end}" for start, end in error_ranges]
         return ValidationResult(valid=False, errors=errors)
+
+    def get_required_packages(self) -> list[str]:
+        """Return required packages for cargo test."""
+        return []  # Rust test is built-in, no extra packages needed
+
+    def get_required_commands(self) -> list[str]:
+        """Return required commands for cargo test."""
+        return ["cargo"]
 
 
 # ── Output parsing ──────────────────────────────────────────────

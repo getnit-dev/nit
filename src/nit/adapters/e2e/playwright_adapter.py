@@ -155,6 +155,14 @@ class PlaywrightAdapter(TestFrameworkAdapter):
         """Parse *test_code* with tree-sitter TypeScript and report syntax errors."""
         return _validate_typescript(test_code)
 
+    def get_required_packages(self) -> list[str]:
+        """Return required packages for Playwright."""
+        return ["@playwright/test"]
+
+    def get_required_commands(self) -> list[str]:
+        """Return required commands for Playwright."""
+        return ["node", "npx"]
+
 
 # ── Detection helpers ────────────────────────────────────────────
 
@@ -181,7 +189,7 @@ def _has_playwright_dependency(project_path: Path) -> bool:
         dev_deps = data.get("devDependencies", {})
         deps = data.get("dependencies", {})
         return _DEV_DEP_NAME in dev_deps or _DEV_DEP_NAME in deps
-    except json.JSONDecodeError, OSError:
+    except (json.JSONDecodeError, OSError):
         return False
 
 

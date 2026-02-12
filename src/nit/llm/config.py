@@ -65,7 +65,7 @@ class LLMConfig:
     """Additional command-line arguments to pass to the CLI tool."""
 
     platform_url: str = ""
-    """Platform base URL (e.g. ``https://api.getnit.dev``)."""
+    """Platform base URL (e.g. ``https://platform.getnit.dev``)."""
 
     platform_api_key: str = ""
     """Platform virtual key used for proxy mode and usage ingestion."""
