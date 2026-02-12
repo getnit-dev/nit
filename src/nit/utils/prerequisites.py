@@ -234,7 +234,24 @@ async def is_package_installed(
         for part in package_parts:
             package_path = package_path / part
 
-        return package_path.exists()
+        if package_path.exists():
+            return True
+
+        # For pnpm workspaces, packages are stored in node_modules/.pnpm/
+        # with the format: .pnpm/<pkg>@<version>/node_modules/<pkg>
+        pnpm_dir = node_modules / ".pnpm"
+        if pnpm_dir.is_dir():
+            # Normalize scoped package name for pnpm directory lookup
+            # e.g., @vitest/coverage-v8 -> @vitest+coverage-v8@<version>
+            pnpm_name = package.replace("/", "+") if package.startswith("@") else package
+            try:
+                for child in pnpm_dir.iterdir():
+                    if child.name.startswith(pnpm_name + "@"):
+                        return True
+            except OSError:
+                pass
+
+        return False
 
     if package_manager in {PackageManager.PIP, PackageManager.POETRY, PackageManager.UV}:
         # Use importlib.metadata to check by distribution name (handles

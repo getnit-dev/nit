@@ -251,7 +251,12 @@ async def _run_gradle_tests(
     timeout: float,
 ) -> tuple[str, list[Path]]:
     gradlew = project_path / "gradlew"
-    cmd = ["./gradlew", "test"] if gradlew.is_file() else ["gradlew.bat", "test"]
+    if gradlew.is_file():
+        cmd = ["./gradlew", "test"]
+    elif (project_path / "gradlew.bat").is_file():
+        cmd = ["gradlew.bat", "test"]
+    else:
+        cmd = ["gradle", "test"]
     if test_files:
         classes = [_path_to_class_name(p, project_path) for p in test_files]
         classes = [c for c in classes if c]
@@ -326,9 +331,7 @@ class JUnit5Adapter(TestFrameworkAdapter):
 
         Optionally collects coverage using JaCoCoAdapter.
         """
-        gradlew = project_path / "gradlew"
-        gradlew_bat = project_path / "gradlew.bat"
-        if gradlew.is_file() or gradlew_bat.is_file():
+        if _has_junit_gradle(project_path):
             raw_output, xml_files = await _run_gradle_tests(project_path, test_files, timeout)
         else:
             raw_output, xml_files = await _run_maven_tests(project_path, test_files, timeout)
