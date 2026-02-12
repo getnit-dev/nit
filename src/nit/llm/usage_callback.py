@@ -38,7 +38,7 @@ _DEFAULT_REQUEST_TIMEOUT_SECONDS = 8.0
 _HTTP_SUCCESS_MIN = 200
 _HTTP_SUCCESS_MAX = 300
 
-_ALLOWED_SOURCES = {"api", "platform", "byok", "cli"}
+_ALLOWED_SOURCES = {"byok", "cli"}
 
 
 @dataclass

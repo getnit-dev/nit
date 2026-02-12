@@ -63,6 +63,7 @@ if TYPE_CHECKING:
     from nit.agents.analyzers.integration_deps import IntegrationDependencyReport
     from nit.agents.analyzers.pattern import ConventionProfile
     from nit.agents.analyzers.risk import RiskReport
+    from nit.agents.analyzers.security import SecurityReport
     from nit.agents.analyzers.semantic_gap import SemanticGap
     from nit.models.route import RouteDiscoveryResult
 
@@ -183,6 +184,9 @@ class PickPipelineResult:
 
     flow_mapping: FlowMappingResult | None = None
     """Identified user flows from discovered routes."""
+
+    security_report: SecurityReport | None = None
+    """Security vulnerability findings."""
 
     success: bool = True
     errors: list[str] = field(default_factory=list)
@@ -342,7 +346,7 @@ class PickPipeline:
         profile: ProjectProfile,
         result: PickPipelineResult,
     ) -> None:
-        """Run steps 5-6: code patterns, conventions, risk, and semantic gaps."""
+        """Run steps 5-6: code patterns, conventions, risk, security, and semantic gaps."""
         has_gaps = bool(result.gap_report and result.gap_report.function_gaps)
 
         if has_gaps:
@@ -352,10 +356,12 @@ class PickPipeline:
             tracker.skip("Analyzing code patterns and conventions")
 
         if has_gaps:
-            tracker.step("Analyzing risk and semantic gaps")
+            tracker.step("Analyzing risk, security, and semantic gaps")
             await self._run_risk_and_semantic_analysis(result.gap_report, result)
         else:
-            tracker.skip("Analyzing risk and semantic gaps")
+            # Security analysis runs even without coverage gaps
+            tracker.step("Analyzing security")
+            await self._run_security_analysis(result)
 
     async def _run_fix_steps(
         self,
@@ -810,15 +816,19 @@ class PickPipeline:
         gap_report: CoverageGapReport | None,
         result: PickPipelineResult,
     ) -> None:
-        """Run risk, integration deps, flow mapping, and semantic gap analysis.
+        """Run risk, security, integration deps, flow mapping, and semantic gap analysis.
 
-        Populates ``result.risk_report``, ``result.integration_deps``,
-        ``result.flow_mapping``, and ``result.semantic_gaps``.
+        Populates ``result.risk_report``, ``result.security_report``,
+        ``result.integration_deps``, ``result.flow_mapping``, and
+        ``result.semantic_gaps``.
         """
         t0 = time.monotonic()
 
         if result.code_maps and gap_report:
             result.risk_report = await self._analyze_risk(result.code_maps, gap_report)
+
+        # Security analysis runs on all code maps (not gated on gaps)
+        await self._run_security_analysis(result)
 
         self._detect_integration_deps(result)
 
@@ -831,6 +841,50 @@ class PickPipeline:
         elapsed = time.monotonic() - t0
         if not self.config.ci_mode:
             self._report_risk_summary(result, elapsed)
+
+    async def _run_security_analysis(self, result: PickPipelineResult) -> None:
+        """Run SecurityAnalyzer on code maps."""
+        from nit.agents.analyzers.security import (
+            SecurityAnalysisTask,
+            SecurityAnalyzer,
+        )
+
+        if not result.code_maps:
+            return
+
+        try:
+            config = load_config(self.config.project_root)
+            if not config.security.enabled:
+                return
+
+            llm_engine = None
+            if config.security.llm_validation:
+                try:
+                    llm_engine = self._create_llm_engine()
+                except Exception:
+                    logger.debug("LLM not available for security validation")
+
+            analyzer = SecurityAnalyzer(
+                project_root=self.config.project_root,
+                llm_engine=llm_engine,
+                enable_llm_validation=config.security.llm_validation,
+                confidence_threshold=config.security.confidence_threshold,
+            )
+
+            task = SecurityAnalysisTask(
+                project_root=str(self.config.project_root),
+                code_maps=result.code_maps,
+                enable_llm_validation=config.security.llm_validation,
+                confidence_threshold=config.security.confidence_threshold,
+            )
+
+            output = await analyzer.run(task)
+            if output.status == TaskStatus.COMPLETED:
+                result.security_report = output.result.get("security_report")
+                if not self.config.ci_mode and result.security_report:
+                    reporter.print_security_summary(result.security_report)
+        except Exception as exc:
+            logger.debug("Security analysis error: %s", exc)
 
     async def _analyze_risk(
         self,

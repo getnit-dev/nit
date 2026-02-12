@@ -177,17 +177,18 @@ def test_load_config_with_platform_section(tmp_path: Path) -> None:
         "llm:\n"
         "  provider: openai\n"
         "  model: gpt-4o\n"
+        "  api_key: sk-test\n"
         "platform:\n"
         "  url: https://platform.getnit.dev\n"
         "  api_key: nit_key_platform\n"
-        "  mode: platform\n"
+        "  mode: byok\n"
     )
 
     cfg = load_llm_config(tmp_path)
 
     assert cfg.platform_url == "https://platform.getnit.dev"
     assert cfg.platform_api_key == "nit_key_platform"
-    assert cfg.resolved_platform_mode == "platform"
+    assert cfg.resolved_platform_mode == "byok"
     assert cfg.is_configured
 
 
@@ -229,23 +230,24 @@ def test_factory_creates_ollama() -> None:
     assert engine.model_name == "codellama"
 
 
-def test_factory_platform_mode_routes_to_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_factory_platform_byok_mode_configures_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NIT_PLATFORM_URL", raising=False)
     monkeypatch.delenv("NIT_PLATFORM_API_KEY", raising=False)
 
     cfg = LLMConfig(
         model="gpt-4o",
         provider="openai",
-        platform_mode="platform",
+        api_key="sk-provider-key",
+        platform_mode="byok",
         platform_url="https://platform.getnit.dev",
-        platform_api_key="nit_key_proxy",
+        platform_api_key="nit_key_usage",
     )
     engine = create_engine(cfg)
     assert isinstance(engine, BuiltinLLM)
-    assert engine._base_url == "https://platform.getnit.dev/api/v1/llm-proxy"
-    assert engine._api_key == "nit_key_proxy"
+    assert engine._api_key == "sk-provider-key"
+    assert engine._base_url is None
     assert os.environ.get("NIT_PLATFORM_URL") == "https://platform.getnit.dev"
-    assert get_platform_api_key() == "nit_key_proxy"
+    assert get_platform_api_key() == "nit_key_usage"
 
 
 def test_factory_byok_mode_keeps_provider_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -404,7 +406,7 @@ async def test_builtin_adds_metadata_and_estimated_headers(
             model="gpt-4o",
             provider="openai",
             api_key="sk-test",
-            base_url="https://platform.getnit.dev/api/v1/llm-proxy",
+            base_url="https://api.openai.com/v1",
         )
     )
     mock_resp = _mock_completion(text="ok", model="gpt-4o")
@@ -422,8 +424,8 @@ async def test_builtin_adds_metadata_and_estimated_headers(
     metadata = call_kwargs["metadata"]
     headers = call_kwargs["extra_headers"]
 
-    assert metadata["nit_usage_source"] == "api"
-    assert metadata["nit_usage_emit"] is False
+    assert metadata["nit_usage_source"] == "byok"
+    assert metadata["nit_usage_emit"] is True
     assert metadata["nit_provider"] == "openai"
     assert metadata["nit_user_id"] == "user-abc"
     assert metadata["nit_project_id"] == "project-xyz"

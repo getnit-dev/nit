@@ -116,6 +116,37 @@ Each detected bug is classified by severity (critical, high, medium, low).
 
 ---
 
+## Security Analyzer
+
+Detects security vulnerabilities using language-aware heuristics and optional LLM validation.
+
+**Capabilities:**
+
+- SQL injection, command injection, path traversal, XSS detection
+- Hardcoded credential scanning (AWS keys, GitHub tokens, Stripe keys, etc.)
+- Insecure deserialization, SSRF, and weak cryptography detection
+- CWE ID mapping for all vulnerability types
+- LLM validation of medium-confidence findings to reduce false positives
+
+**Supported languages:** Python, JavaScript/TypeScript, Java, Go, Rust, C/C++, C#
+
+**Configuration:**
+
+```yaml
+security:
+  enabled: true
+  llm_validation: true
+  confidence_threshold: 0.7
+  severity_threshold: medium
+  exclude_patterns: []
+```
+
+**Used by:** Pick pipeline (always runs when enabled)
+
+See [Security Analysis](../features/security-analysis.md) for full details.
+
+---
+
 ## Semantic Gap Detector
 
 Identifies semantic gaps — places where the code's behavior doesn't match what a reasonable developer would expect.

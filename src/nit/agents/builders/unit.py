@@ -25,6 +25,7 @@ from nit.agents.base import BaseAgent, TaskInput, TaskOutput, TaskStatus
 from nit.llm.context import ContextAssembler
 from nit.llm.engine import GenerationRequest, LLMError, LLMMessage
 from nit.memory.global_memory import GlobalMemory
+from nit.memory.helpers import get_memory_context, inject_memory_into_messages
 
 if TYPE_CHECKING:
     from nit.adapters.base import RunResult, TestFrameworkAdapter, ValidationResult
@@ -343,37 +344,12 @@ class UnitBuilder(BaseAgent):
             Dictionary with 'known_patterns' and 'failed_patterns' lists,
             or None if memory is disabled.
         """
-        if not self._memory:
-            return None
-
-        known_patterns = self._memory.get_known_patterns()
-        failed_patterns = self._memory.get_failed_patterns()
-
-        # Filter patterns relevant to this framework
-        relevant_known = [
-            p["pattern"]
-            for p in known_patterns
-            if framework.lower() in p.get("context", {}).get("language", "").lower()
-            or not p.get("context", {}).get("language")
-        ]
-
-        relevant_failed = [
-            f"{p['pattern']}: {p['reason']}"
-            for p in failed_patterns
-            if framework.lower() in p.get("context", {}).get("framework", "").lower()
-            or not p.get("context", {}).get("framework")
-        ]
-
-        logger.debug(
-            "Retrieved %d known patterns and %d failed patterns from memory",
-            len(relevant_known),
-            len(relevant_failed),
+        return get_memory_context(
+            self._memory,
+            known_filter_key="language",
+            failed_filter_key="framework",
+            filter_value=framework,
         )
-
-        return {
-            "known_patterns": relevant_known[:10],  # Limit to top 10
-            "failed_patterns": relevant_failed[:10],
-        }
 
     def _add_memory_to_prompt(
         self, rendered_prompt: object, memory_context: dict[str, list[str]]
@@ -390,33 +366,7 @@ class UnitBuilder(BaseAgent):
         if not hasattr(rendered_prompt, "messages") or not memory_context:
             return
 
-        known = memory_context.get("known_patterns", [])
-        failed = memory_context.get("failed_patterns", [])
-
-        if not known and not failed:
-            return
-
-        # Build memory guidance text
-        guidance_parts = []
-
-        if known:
-            guidance_parts.append(
-                "**Known successful patterns from previous test generation:**\n"
-                + "\n".join(f"- {p}" for p in known)
-            )
-
-        if failed:
-            guidance_parts.append(
-                "**Patterns to avoid (these failed previously):**\n"
-                + "\n".join(f"- {p}" for p in failed)
-            )
-
-        guidance_text = "\n\n".join(guidance_parts)
-
-        # Add as a user message at the end
-        rendered_prompt.messages.append(LLMMessage(role="user", content=f"\n\n{guidance_text}"))
-
-        logger.debug("Added memory context to prompt")
+        inject_memory_into_messages(rendered_prompt.messages, memory_context)
 
     async def _run_validation_pipeline(
         self,

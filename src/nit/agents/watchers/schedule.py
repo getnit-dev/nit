@@ -233,7 +233,6 @@ class ScheduleWatcher(BaseAgent):
                 timeout=self._timeout,
             )
 
-            duration = time.time() - start
             end_time = datetime.now(UTC).isoformat()
 
             run_result = ScheduledRunResult(
@@ -244,7 +243,7 @@ class ScheduleWatcher(BaseAgent):
                 success=result.exit_code == 0,
                 exit_code=result.exit_code,
                 output=result.combined_output,
-                duration_seconds=duration,
+                duration_seconds=result.duration,
             )
 
             self._run_history.append(run_result)

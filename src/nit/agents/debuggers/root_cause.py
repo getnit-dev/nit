@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING
 
 from nit.agents.base import BaseAgent, TaskInput, TaskOutput, TaskStatus
 from nit.llm.engine import GenerationRequest, LLMMessage
+from nit.memory.global_memory import GlobalMemory
+from nit.memory.helpers import get_memory_context, inject_memory_into_messages, record_outcome
 from nit.parsing.languages import extract_from_file
 
 if TYPE_CHECKING:
@@ -107,16 +109,20 @@ class RootCauseAnalyzer(BaseAgent):
         self,
         llm_engine: LLMEngine,
         project_root: Path,
+        *,
+        enable_memory: bool = True,
     ) -> None:
         """Initialize the RootCauseAnalyzer.
 
         Args:
             llm_engine: LLM engine for reasoning about root causes.
             project_root: Root directory of the project.
+            enable_memory: Whether to use GlobalMemory for pattern learning.
         """
         super().__init__()
         self._llm = llm_engine
         self._project_root = project_root
+        self._memory = GlobalMemory(project_root) if enable_memory else None
 
     @property
     def name(self) -> str:
@@ -179,6 +185,13 @@ class RootCauseAnalyzer(BaseAgent):
                 root_cause.confidence,
             )
 
+            record_outcome(
+                self._memory,
+                successful=True,
+                domain="root_cause_analysis",
+                context_dict={"domain": "debugging", "category": root_cause.category},
+            )
+
             return TaskOutput(
                 status=TaskStatus.COMPLETED,
                 result={
@@ -188,6 +201,13 @@ class RootCauseAnalyzer(BaseAgent):
 
         except Exception as e:
             logger.exception("Root cause analysis failed: %s", e)
+            record_outcome(
+                self._memory,
+                successful=False,
+                domain="root_cause_analysis",
+                context_dict={"domain": "debugging"},
+                error_message=str(e),
+            )
             return TaskOutput(
                 status=TaskStatus.FAILED,
                 errors=[f"Root cause analysis error: {e}"],
@@ -532,11 +552,21 @@ Contributing Factors: <list other factors>"""
 
         user_prompt = "What is the root cause of this bug?"
 
+        messages = [
+            LLMMessage(role="system", content=system_prompt),
+            LLMMessage(role="user", content=user_prompt),
+        ]
+
+        memory_context = get_memory_context(
+            self._memory,
+            known_filter_key="domain",
+            failed_filter_key="domain",
+            filter_value="debugging",
+        )
+        inject_memory_into_messages(messages, memory_context)
+
         request = GenerationRequest(
-            messages=[
-                LLMMessage(role="system", content=system_prompt),
-                LLMMessage(role="user", content=user_prompt),
-            ],
+            messages=messages,
             temperature=0.3,  # Moderate temperature for reasoning
             max_tokens=1500,
         )

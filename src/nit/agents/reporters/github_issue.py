@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from nit.agents.analyzers.bug import BugReport
+    from nit.agents.analyzers.security import SecurityFinding
     from nit.agents.debuggers.fix_gen import GeneratedFix
     from nit.agents.debuggers.root_cause import RootCause
 
@@ -648,6 +649,49 @@ class GitHubIssueReporter:
         )
 
         logger.info("Added comment to issue #%d via API", issue_number)
+
+    def create_security_issue(self, finding: SecurityFinding) -> IssueCreationResult:
+        """Create a GitHub issue for a security finding.
+
+        Args:
+            finding: Security finding to report.
+
+        Returns:
+            Result of issue creation operation.
+        """
+        try:
+            title = f"[Security] {finding.title}"
+            body = (
+                f"## Security Finding\n\n"
+                f"**Type**: {finding.vulnerability_type.value}\n"
+                f"**Severity**: {finding.severity.value.upper()}\n"
+                f"**CWE**: {finding.cwe_id or 'N/A'}\n"
+                f"**Confidence**: {finding.confidence:.0%}\n\n"
+                f"### Description\n\n{finding.description}\n\n"
+                f"### Location\n\n"
+                f"File: `{finding.file_path}`\n"
+                f"Line: {finding.line_number or 'Unknown'}\n"
+                f"Function: `{finding.function_name or 'Unknown'}`\n\n"
+                f"### Evidence\n\n```\n{finding.evidence[:500]}\n```\n\n"
+                f"### Remediation\n\n{finding.remediation}\n\n"
+                f"---\n*Created by nit security analysis.*"
+            )
+            labels = ["security", finding.severity.value]
+
+            if self._use_gh_cli:
+                result = self._create_issue_with_gh_cli(title, body, labels)
+            else:
+                result = self._create_issue_with_api(title, body, labels)
+
+            logger.info("Created security issue #%s: %s", result.issue_number, result.issue_url)
+            return result
+
+        except Exception as exc:
+            logger.warning("Failed to create security issue: %s", exc)
+            return IssueCreationResult(
+                success=False,
+                error=str(exc),
+            )
 
     @staticmethod
     def _parse_github_url(url: str) -> tuple[str | None, str | None]:

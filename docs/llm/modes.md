@@ -95,4 +95,3 @@ The custom command receives a prompt via stdin and should output the response to
 | Local/private inference | `ollama` |
 | Already using Claude CLI or Codex | `cli` |
 | Custom model hosting | `custom` |
-| Platform-proxied LLM | `builtin` + `platform.mode: platform` |

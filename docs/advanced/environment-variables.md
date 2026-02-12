@@ -17,7 +17,7 @@ nit reads several environment variables as fallbacks for configuration values. E
 |----------|-------------------|-------------|
 | `NIT_PLATFORM_URL` | `platform.url` | Platform base URL |
 | `NIT_PLATFORM_API_KEY` | `platform.api_key` | Platform API key |
-| `NIT_PLATFORM_MODE` | `platform.mode` | Platform mode |
+| `NIT_PLATFORM_MODE` | `platform.mode` | Platform mode (`byok` or `disabled`) |
 | `NIT_PLATFORM_USER_ID` | `platform.user_id` | User ID for metadata |
 | `NIT_PLATFORM_PROJECT_ID` | `platform.project_id` | Project ID for metadata |
 | `NIT_PLATFORM_KEY_HASH` | `platform.key_hash` | Key hash override |
@@ -40,6 +40,8 @@ These are read by LiteLLM directly:
 |----------|----------|
 | `OPENAI_API_KEY` | OpenAI |
 | `ANTHROPIC_API_KEY` | Anthropic |
+| `GEMINI_API_KEY` / `GOOGLE_API_KEY` | Google Gemini |
+| `OPENROUTER_API_KEY` | OpenRouter |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | AWS Bedrock |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Google Vertex AI |
 | `AZURE_API_KEY` | Azure OpenAI |

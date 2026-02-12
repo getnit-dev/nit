@@ -200,61 +200,6 @@ def test_platform_mode_byok_passthrough() -> None:
     assert isinstance(engine, BuiltinLLM)
 
 
-def test_platform_mode_platform_requires_url() -> None:
-    """Test that platform mode requires platform_url."""
-    config = _make_config(
-        mode="builtin",
-        model="gpt-4o",
-        platform_mode="platform",
-        platform_url="",
-        platform_api_key="pk-test",
-    )
-    with pytest.raises(LLMError, match=r"platform\.url"):
-        create_engine(config)
-
-
-def test_platform_mode_platform_requires_api_key() -> None:
-    """Test that platform mode requires platform_api_key."""
-    config = _make_config(
-        mode="builtin",
-        model="gpt-4o",
-        platform_mode="platform",
-        platform_url="https://platform.getnit.dev",
-        platform_api_key="",
-    )
-    with pytest.raises(LLMError, match=r"platform\.api_key"):
-        create_engine(config)
-
-
-def test_platform_mode_platform_requires_builtin_or_ollama() -> None:
-    """Test that platform mode only works with builtin/ollama LLM modes."""
-    config = _make_config(
-        mode="cli",
-        model="gpt-4o",
-        cli_command="claude",
-        platform_mode="platform",
-        platform_url="https://platform.getnit.dev",
-        platform_api_key="pk-test",
-    )
-    with pytest.raises(LLMError, match=r"requires llm\.mode"):
-        create_engine(config)
-
-
-@patch("nit.llm.factory.build_llm_proxy_base_url", return_value="https://proxy.example.com/v1")
-def test_platform_mode_platform_sets_base_url(mock_proxy: MagicMock) -> None:
-    """Test that platform mode sets base_url and api_key from platform config."""
-    config = _make_config(
-        mode="builtin",
-        model="gpt-4o",
-        platform_mode="platform",
-        platform_url="https://platform.getnit.dev",
-        platform_api_key="pk-test",
-    )
-    engine = create_engine(config)
-    assert isinstance(engine, BuiltinLLM)
-    mock_proxy.assert_called_once_with("https://platform.getnit.dev")
-
-
 def test_platform_mode_invalid_falls_back_to_disabled() -> None:
     """Test that invalid platform_mode without url/key resolves to disabled."""
     config = _make_config(

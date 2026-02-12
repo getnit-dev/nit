@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from nit.llm.builtin import BuiltinLLM, BuiltinLLMConfig, RateLimitConfig, RetryConfig
@@ -15,7 +14,6 @@ from nit.llm.cli_adapter import (
 from nit.llm.engine import LLMEngine, LLMError
 from nit.utils.platform_client import (
     PlatformRuntimeConfig,
-    build_llm_proxy_base_url,
     configure_platform_environment,
 )
 
@@ -63,30 +61,7 @@ def _apply_platform_runtime(config: LLMConfig) -> LLMConfig:
     )
     configure_platform_environment(platform)
 
-    resolved_mode = config.resolved_platform_mode
-    if resolved_mode == "disabled":
-        return config
-
-    if resolved_mode == "byok":
-        return config
-
-    if resolved_mode != "platform":
-        raise LLMError("Invalid platform.mode value. Expected one of: platform, byok, disabled.")
-
-    if config.mode not in {"builtin", "ollama"}:
-        raise LLMError("platform.mode=platform requires llm.mode to be 'builtin' or 'ollama'.")
-
-    if not config.platform_url:
-        raise LLMError("platform.mode=platform requires platform.url to be configured.")
-
-    if not config.platform_api_key:
-        raise LLMError("platform.mode=platform requires platform.api_key to be configured.")
-
-    return replace(
-        config,
-        base_url=build_llm_proxy_base_url(config.platform_url),
-        api_key=config.platform_api_key,
-    )
+    return config
 
 
 def _create_builtin(config: LLMConfig) -> BuiltinLLM:

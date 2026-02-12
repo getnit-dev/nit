@@ -151,7 +151,7 @@ class TestLoadConfig:
                 "platform": {
                     "url": "https://platform.getnit.dev",
                     "api_key": "pk-test",
-                    "mode": "platform",
+                    "mode": "byok",
                 },
                 "workspace": {
                     "auto_detect": False,
@@ -298,10 +298,6 @@ class TestLLMConfigIsConfigured:
 
 
 class TestPlatformNormalizedMode:
-    def test_explicit_platform(self) -> None:
-        cfg = PlatformConfig(mode="platform")
-        assert cfg.normalized_mode == "platform"
-
     def test_explicit_byok(self) -> None:
         cfg = PlatformConfig(mode="byok")
         assert cfg.normalized_mode == "byok"
@@ -310,9 +306,9 @@ class TestPlatformNormalizedMode:
         cfg = PlatformConfig(mode="disabled")
         assert cfg.normalized_mode == "disabled"
 
-    def test_auto_platform_from_url_and_key(self) -> None:
+    def test_auto_byok_from_url_and_key(self) -> None:
         cfg = PlatformConfig(url="https://platform.example", api_key="pk-x")
-        assert cfg.normalized_mode == "platform"
+        assert cfg.normalized_mode == "byok"
 
     def test_auto_disabled(self) -> None:
         cfg = PlatformConfig()
@@ -407,13 +403,13 @@ class TestValidatePlatformConfig:
         cfg = PlatformConfig(mode="disabled")
         assert _validate_platform_config(cfg) == []
 
-    def test_platform_missing_url(self) -> None:
-        cfg = PlatformConfig(mode="platform", url="", api_key="key")
+    def test_byok_missing_url(self) -> None:
+        cfg = PlatformConfig(mode="byok", url="", api_key="key")
         errors = _validate_platform_config(cfg)
         assert any("url" in e for e in errors)
 
-    def test_platform_missing_key(self) -> None:
-        cfg = PlatformConfig(mode="platform", url="https://x", api_key="")
+    def test_byok_missing_key(self) -> None:
+        cfg = PlatformConfig(mode="byok", url="https://x", api_key="")
         errors = _validate_platform_config(cfg)
         assert any("api_key" in e for e in errors)
 

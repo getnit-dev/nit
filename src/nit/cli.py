@@ -140,15 +140,7 @@ def _mask_sensitive_values(config_dict: dict[str, Any]) -> dict[str, Any]:
 
 
 def _is_llm_runtime_configured(config_obj: Any) -> bool:
-    if config_obj.llm.is_configured:
-        return True
-
-    platform_mode = config_obj.platform.normalized_mode
-    return (
-        config_obj.llm.mode in {"builtin", "ollama"}
-        and platform_mode == "platform"
-        and bool(config_obj.llm.model and config_obj.platform.url and config_obj.platform.api_key)
-    )
+    return bool(config_obj.llm.is_configured)
 
 
 class _ScanKwargs(TypedDict):
@@ -889,9 +881,9 @@ def _interactive_config_setup() -> dict[str, Any]:
     # Platform Integration & Key Management (FIRST - determines if user needs own API key)
     platform_config = _prompt_platform_config()
 
-    # LLM Configuration (conditionally asks for API key based on platform mode)
+    # LLM Configuration
     platform_mode = platform_config.get("mode", "disabled")
-    llm_config = _prompt_llm_config(platform_mode)
+    llm_config = _prompt_llm_config()
 
     # Reporting Configuration (Slack/Email)
     report_config = _prompt_report_config()
@@ -906,7 +898,7 @@ def _interactive_config_setup() -> dict[str, Any]:
     coverage_config = _prompt_coverage_config()
 
     # Report Format Configuration
-    platform_enabled = platform_mode in {"platform", "byok"}
+    platform_enabled = platform_mode == "byok"
     report_format_config = _prompt_report_format_config(platform_enabled)
 
     # Merge report configs
@@ -936,42 +928,27 @@ def _interactive_config_setup() -> dict[str, Any]:
     }
 
 
-def _prompt_llm_config(platform_mode: str = "disabled") -> dict[str, Any]:
-    """Prompt for LLM configuration.
-
-    Args:
-        platform_mode: Platform integration mode (platform, byok, or disabled).
-                      Determines whether to ask for API key.
-    """
+def _prompt_llm_config() -> dict[str, Any]:
+    """Prompt for LLM configuration."""
     console.print("[bold]2. LLM Provider Configuration[/bold]")
     console.print()
 
-    # If platform mode, skip mode selection - platform manages keys
-    if platform_mode == "platform":
-        console.print("[dim]Platform mode: LLM requests are proxied through the platform[/dim]")
-        console.print()
-
-        # Prompt for model only
-        console.print("[bold]Which model would you like to use?[/bold]")
-        model = click.prompt(
-            "Model name",
-            default="gpt-4o",
-        )
-
-        return {
-            "mode": "builtin",
-            "provider": "openai",
-            "model": model,
-            "api_key": "",
-            "base_url": "",
-        }
-
-    # BYOK or disabled: user configures their own LLM
+    # User configures their own LLM
     choices: list[tuple[str, dict[str, Any]]] = [
-        ("Built-in (API key) — Claude, GPT, Gemini, etc.", _default_builtin_llm_init_config()),
+        ("Built-in (API key) — Claude, GPT, Gemini, OpenRouter, etc.", {}),
         ("Claude Code CLI — uses your installed `claude` command", _claude_cli_llm_init_config()),
         ("Codex CLI — uses OpenAI's `codex` command", _codex_cli_llm_init_config()),
         ("Ollama (local) — run models on your machine", _ollama_llm_init_config()),
+        (
+            "LM Studio (local) — OpenAI-compatible local server",
+            {
+                "mode": "builtin",
+                "provider": "openai",
+                "model": "",
+                "api_key": "",
+                "base_url": "http://localhost:1234/v1",
+            },
+        ),
         ("Custom command — specify your own tool", _custom_command_llm_init_config()),
     ]
 
@@ -984,17 +961,22 @@ def _prompt_llm_config(platform_mode: str = "disabled") -> dict[str, Any]:
     selected = int(click.prompt("Select option", type=click.IntRange(1, len(choices)), default=1))
     _, config = choices[selected - 1]
 
+    # Built-in mode: prompt for specific provider
+    if not config:
+        config = _prompt_builtin_provider()
+
     if config.get("mode") == "cli":
         cli_command = str(config.get("cli_command", "")).strip()
         if cli_command:
             _check_selected_cli_tool(cli_command)
 
     # Prompt for API key if needed (and not already set via env)
-    if config.get("mode") in {"builtin", "ollama"} and not config.get("api_key"):
+    needs_api_key = config.get("mode") in {"builtin"} and not config.get("_skip_api_key")
+    if needs_api_key and not config.get("api_key"):
         console.print()
         if click.confirm("Configure API key now?", default=True):
             api_key = click.prompt(
-                "API key (or leave empty to use NIT_LLM_API_KEY env var)",
+                "API key (or leave empty to use environment variable)",
                 default="",
                 show_default=False,
                 hide_input=True,
@@ -1002,20 +984,142 @@ def _prompt_llm_config(platform_mode: str = "disabled") -> dict[str, Any]:
             if api_key:
                 config["api_key"] = api_key
         else:
-            console.print("[dim]You can set it later via NIT_LLM_API_KEY env var or .nit.yml[/dim]")
+            console.print("[dim]You can set it later via environment variable or .nit.yml[/dim]")
+
+    config.pop("_skip_api_key", None)
+
+    # Prompt for base_url if provider needs one and it's not set
+    if config.get("_needs_base_url") and not config.get("base_url"):
+        console.print()
+        base_url = click.prompt("Base URL", default="")
+        config["base_url"] = base_url
+    config.pop("_needs_base_url", None)
 
     # Prompt for model if not set
     if not config.get("model"):
-        suggested_model = (
-            "gpt-4o" if config.get("provider") == "openai" else "claude-sonnet-4-5-20250514"
-        )
-        model = click.prompt(
-            "Model name",
-            default=suggested_model,
-        )
+        suggested = _suggested_model_for_provider(config.get("provider", "openai"))
+        model = click.prompt("Model name", default=suggested)
         config["model"] = model
 
     return config
+
+
+def _prompt_builtin_provider() -> dict[str, Any]:
+    """Prompt for a specific LLM provider when Built-in mode is selected."""
+    providers: list[tuple[str, dict[str, Any]]] = [
+        (
+            "OpenAI (GPT-4o, etc.)",
+            {
+                "mode": "builtin",
+                "provider": "openai",
+                "model": "gpt-4o",
+                "api_key": "",
+                "base_url": "",
+            },
+        ),
+        (
+            "Anthropic (Claude)",
+            {
+                "mode": "builtin",
+                "provider": "anthropic",
+                "model": "claude-sonnet-4-5-20250514",
+                "api_key": "",
+                "base_url": "",
+            },
+        ),
+        (
+            "Google Gemini",
+            {
+                "mode": "builtin",
+                "provider": "gemini",
+                "model": "gemini-2.0-flash",
+                "api_key": "",
+                "base_url": "",
+            },
+        ),
+        (
+            "OpenRouter (multi-provider routing)",
+            {
+                "mode": "builtin",
+                "provider": "openrouter",
+                "model": "openrouter/auto",
+                "api_key": "",
+                "base_url": "https://openrouter.ai/api/v1",
+            },
+        ),
+        (
+            "AWS Bedrock",
+            {
+                "mode": "builtin",
+                "provider": "bedrock",
+                "model": "anthropic.claude-3-sonnet-20240229-v1:0",
+                "api_key": "",
+                "base_url": "",
+                "_skip_api_key": True,
+            },
+        ),
+        (
+            "Google Vertex AI",
+            {
+                "mode": "builtin",
+                "provider": "vertex_ai",
+                "model": "gemini-pro",
+                "api_key": "",
+                "base_url": "",
+                "_skip_api_key": True,
+            },
+        ),
+        (
+            "Azure OpenAI",
+            {
+                "mode": "builtin",
+                "provider": "azure",
+                "model": "gpt-4o",
+                "api_key": "",
+                "base_url": "",
+                "_needs_base_url": True,
+            },
+        ),
+        (
+            "Custom (any OpenAI-compatible endpoint)",
+            {
+                "mode": "builtin",
+                "provider": "openai",
+                "model": "",
+                "api_key": "",
+                "base_url": "",
+                "_needs_base_url": True,
+            },
+        ),
+    ]
+
+    console.print()
+    console.print("[bold]Select your LLM provider:[/bold]")
+    console.print()
+    for index, (label, _) in enumerate(providers, start=1):
+        console.print(f"  {index}. {label}")
+    console.print()
+
+    selected = int(
+        click.prompt("Select provider", type=click.IntRange(1, len(providers)), default=1)
+    )
+    _, config = providers[selected - 1]
+    return config
+
+
+def _suggested_model_for_provider(provider: str) -> str:
+    """Return a sensible default model for a given provider."""
+    defaults: dict[str, str] = {
+        "openai": "gpt-4o",
+        "anthropic": "claude-sonnet-4-5-20250514",
+        "gemini": "gemini-2.0-flash",
+        "openrouter": "openrouter/auto",
+        "bedrock": "anthropic.claude-3-sonnet-20240229-v1:0",
+        "vertex_ai": "gemini-pro",
+        "azure": "gpt-4o",
+        "ollama": "llama3.1",
+    }
+    return defaults.get(provider, "gpt-4o")
 
 
 def _prompt_platform_config() -> dict[str, Any]:
@@ -1023,20 +1127,16 @@ def _prompt_platform_config() -> dict[str, Any]:
     console.print("[bold]1. Platform Integration & Key Management[/bold]")
     console.print()
 
-    console.print("nit can operate in three modes:")
-    console.print("  1. [bold]Platform Mode[/bold] - Platform manages LLM keys via proxy")
+    console.print("nit can operate in two modes:")
     console.print(
-        "  2. [bold]BYOK (Bring Your Own Key)[/bold] - Use your LLM API keys + platform reporting"
+        "  1. [bold]BYOK (Bring Your Own Key)[/bold] - Use your LLM API keys + platform reporting"
     )
-    console.print("  3. [bold]Disabled[/bold] - No platform integration (fully local)")
+    console.print("  2. [bold]Disabled[/bold] - No platform integration (fully local)")
     console.print()
 
-    # Support both numeric (1, 2, 3) and text (platform, byok, disabled) input
     mode_map = {
-        "1": "platform",
-        "2": "byok",
-        "3": "disabled",
-        "platform": "platform",
+        "1": "byok",
+        "2": "disabled",
         "byok": "byok",
         "disabled": "disabled",
     }
@@ -1044,7 +1144,7 @@ def _prompt_platform_config() -> dict[str, Any]:
     while True:
         mode_input = (
             click.prompt(
-                "Select mode (platform, byok, disabled)",
+                "Select mode (byok, disabled)",
                 default="disabled",
                 show_default=True,
             )
@@ -1056,20 +1156,17 @@ def _prompt_platform_config() -> dict[str, Any]:
             mode_choice = mode_map[mode_input]
             break
 
-        console.print(
-            f"[red]Error: '{mode_input}' is not one of 'platform', 'byok', 'disabled'.[/red]"
-        )
+        console.print(f"[red]Error: '{mode_input}' is not one of 'byok', 'disabled'.[/red]")
 
     platform_config: dict[str, Any] = {
         "mode": mode_choice,
         "url": "",
-        "llm_api_key": "",
         "reporting_api_key": "",
         "user_id": "",
         "project_id": "",
     }
 
-    if mode_choice in {"platform", "byok"}:
+    if mode_choice == "byok":
         console.print()
         url = click.prompt(
             "Platform URL",
@@ -1077,19 +1174,6 @@ def _prompt_platform_config() -> dict[str, Any]:
         )
         platform_config["url"] = url
 
-        # Platform mode: needs LLM proxy key
-        if mode_choice == "platform":
-            console.print()
-            console.print("[dim]Platform mode: LLM requests go through platform proxy[/dim]")
-            llm_api_key = click.prompt(
-                "Platform LLM API key (for proxied LLM requests)",
-                default="",
-                show_default=False,
-                hide_input=True,
-            )
-            platform_config["llm_api_key"] = llm_api_key
-
-        # Both modes can use reporting
         console.print()
         if click.confirm("Enable platform reporting (usage metrics, test results)?", default=True):
             reporting_api_key = click.prompt(
@@ -1099,9 +1183,6 @@ def _prompt_platform_config() -> dict[str, Any]:
                 hide_input=True,
             )
             platform_config["reporting_api_key"] = reporting_api_key
-
-            # Note: Project ID and User ID are extracted from the API token on the backend
-            # No need to configure them separately
 
     return platform_config
 
@@ -1512,10 +1593,20 @@ def _select_llm_init_config() -> dict[str, Any]:
         return _default_builtin_llm_init_config()
 
     choices: list[tuple[str, dict[str, Any]]] = [
-        ("Built-in (API key) — Claude, GPT, Gemini, etc.", _default_builtin_llm_init_config()),
+        ("Built-in (API key) — Claude, GPT, Gemini, OpenRouter, etc.", {}),
         ("Claude Code CLI — uses your installed `claude` command", _claude_cli_llm_init_config()),
         ("Codex CLI — uses OpenAI's `codex` command", _codex_cli_llm_init_config()),
         ("Ollama (local) — run models on your machine", _ollama_llm_init_config()),
+        (
+            "LM Studio (local) — OpenAI-compatible local server",
+            {
+                "mode": "builtin",
+                "provider": "openai",
+                "model": "",
+                "api_key": "",
+                "base_url": "http://localhost:1234/v1",
+            },
+        ),
         ("Custom command — specify your own tool", _custom_command_llm_init_config()),
     ]
 
@@ -1528,6 +1619,9 @@ def _select_llm_init_config() -> dict[str, Any]:
 
     selected = int(click.prompt("Select option", type=click.IntRange(1, len(choices)), default=1))
     _, config = choices[selected - 1]
+
+    if not config:
+        config = _prompt_builtin_provider()
 
     if config.get("mode") == "cli":
         cli_command = str(config.get("cli_command", "")).strip()
@@ -1560,7 +1654,7 @@ def _render_llm_section(llm_config: dict[str, Any]) -> list[str]:
     lines = ["llm:", f"  mode: {mode}       # builtin | cli | custom | ollama"]
 
     if mode in {"builtin", "ollama"}:
-        lines.append(f"  provider: {provider}   # openai | anthropic | ollama")
+        lines.append(f"  provider: {provider}   # openai | anthropic | gemini | openrouter | ...")
         lines.append(f"  model: {_format_yaml_string(model)}")
         lines.append(f"  api_key: {_format_yaml_string(api_key)}  # or set NIT_LLM_API_KEY env var")
         lines.append(f"  base_url: {_format_yaml_string(base_url)}")
@@ -1577,7 +1671,7 @@ def _render_llm_section(llm_config: dict[str, Any]) -> list[str]:
 
         return lines
 
-    lines.append(f"  provider: {provider}   # openai | anthropic | ollama")
+    lines.append(f"  provider: {provider}   # openai | anthropic | gemini | openrouter | ...")
     lines.append(f"  model: {_format_yaml_string(model)}")
     lines.append(f"  cli_command: {_format_yaml_string(cli_command)}")
     lines.append(f"  cli_timeout: {cli_timeout}")
@@ -1595,19 +1689,15 @@ def _render_platform_section(platform_config: dict[str, Any]) -> list[str]:
     """Render platform integration config lines for ``.nit.yml``."""
     mode = str(platform_config.get("mode", "disabled"))
     url = str(platform_config.get("url", ""))
-    llm_api_key = str(platform_config.get("llm_api_key", ""))
     reporting_api_key = str(platform_config.get("reporting_api_key", ""))
     user_id = str(platform_config.get("user_id", ""))
     project_id = str(platform_config.get("project_id", ""))
 
     lines = [
         "platform:",
-        f"  mode: {mode}  # platform | byok | disabled",
+        f"  mode: {mode}  # byok | disabled",
         f"  url: {_format_yaml_string(url)}  # or set NIT_PLATFORM_URL env var",
     ]
-
-    if mode == "platform":
-        lines.append(f"  llm_api_key: {_format_yaml_string(llm_api_key)}  # Platform LLM proxy key")
 
     if reporting_api_key:
         lines.append(f"  reporting_api_key: {_format_yaml_string(reporting_api_key)}")

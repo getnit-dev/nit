@@ -90,6 +90,32 @@ def _detect_openai_api_key() -> _DetectResult:
     return {}, ""
 
 
+def _detect_gemini_api_key() -> _DetectResult:
+    key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if key:
+        env_var = "GEMINI_API_KEY" if os.environ.get("GEMINI_API_KEY") else "GOOGLE_API_KEY"
+        return {
+            "mode": "builtin",
+            "provider": "gemini",
+            "model": "gemini-2.0-flash",
+            "api_key": f"${{{env_var}}}",
+            "base_url": "",
+        }, f"{env_var} env var"
+    return {}, ""
+
+
+def _detect_openrouter_api_key() -> _DetectResult:
+    if os.environ.get("OPENROUTER_API_KEY"):
+        return {
+            "mode": "builtin",
+            "provider": "openrouter",
+            "model": "openrouter/auto",
+            "api_key": "${OPENROUTER_API_KEY}",
+            "base_url": "https://openrouter.ai/api/v1",
+        }, "OPENROUTER_API_KEY env var"
+    return {}, ""
+
+
 def _detect_nit_llm_api_key() -> _DetectResult:
     if os.environ.get("NIT_LLM_API_KEY"):
         return {
@@ -205,6 +231,8 @@ def _detect_llm(project_root: Path) -> _DetectResult:
     checks: list[Callable[[], _DetectResult]] = [
         _detect_anthropic_api_key,
         _detect_openai_api_key,
+        _detect_gemini_api_key,
+        _detect_openrouter_api_key,
         _detect_nit_llm_api_key,
         partial(_detect_claude_project_dir, project_root),
         _detect_claude_cli,
@@ -237,14 +265,13 @@ def _detect_platform() -> _DetectResult:
     url = os.environ.get("NIT_PLATFORM_URL", "")
 
     if api_key:
-        mode = "platform" if url else "byok"
         return {
             "url": url or "",
             "api_key": "${NIT_PLATFORM_API_KEY}",
-            "mode": mode,
+            "mode": "byok",
             "user_id": os.environ.get("NIT_PLATFORM_USER_ID", ""),
             "project_id": os.environ.get("NIT_PLATFORM_PROJECT_ID", ""),
-        }, f"NIT_PLATFORM_API_KEY env var (mode={mode})"
+        }, "NIT_PLATFORM_API_KEY env var (mode=byok)"
 
     return {
         "url": "",

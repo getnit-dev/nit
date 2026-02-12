@@ -147,7 +147,7 @@ def test_callback_respects_emit_flag(monkeypatch: pytest.MonkeyPatch) -> None:
             "litellm_params": {
                 "metadata": {
                     "nit_user_id": "user-x",
-                    "nit_usage_source": "api",
+                    "nit_usage_source": "byok",
                     "nit_usage_emit": False,
                 }
             }
@@ -269,8 +269,6 @@ class TestNormalizeSource:
     """Tests for _normalize_source."""
 
     def test_valid_sources(self) -> None:
-        assert usage_callback._normalize_source("api") == "api"
-        assert usage_callback._normalize_source("platform") == "platform"
         assert usage_callback._normalize_source("byok") == "byok"
         assert usage_callback._normalize_source("cli") == "cli"
 
@@ -476,11 +474,11 @@ class TestBatchedUsageReporter:
             request_timeout_seconds=8.0,
         )
         reporter = usage_callback.BatchedUsageReporter(config)
-        meta = reporter.build_metadata(usage_callback.MetadataParams(source="api", mode="builtin"))
+        meta = reporter.build_metadata(usage_callback.MetadataParams(source="byok", mode="builtin"))
         assert meta["nit_user_id"] == "u1"
         assert meta["nit_project_id"] == "p1"
         assert meta["nit_key_hash"] == "kh"
-        assert meta["nit_usage_source"] == "api"
+        assert meta["nit_usage_source"] == "byok"
 
     def test_build_metadata_with_overrides(self) -> None:
         config = usage_callback.UsageReporterConfig(

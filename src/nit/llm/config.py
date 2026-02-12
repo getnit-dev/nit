@@ -86,10 +86,10 @@ class LLMConfig:
     def resolved_platform_mode(self) -> str:
         """Resolved platform mode with sane defaults."""
         mode = self.platform_mode.strip().lower()
-        if mode in {"platform", "byok", "disabled"}:
+        if mode in {"byok", "disabled"}:
             return mode
         if self.platform_url and self.platform_api_key:
-            return "platform"
+            return "byok"
         return "disabled"
 
     @property
@@ -99,8 +99,6 @@ class LLMConfig:
             return bool(self.model)
         if self.mode in ("cli", "custom"):
             return bool(self.model and self.cli_command)
-        if self.resolved_platform_mode == "platform":
-            return bool(self.model and self.platform_url and self.platform_api_key)
         return bool(self.model and self.api_key)
 
 

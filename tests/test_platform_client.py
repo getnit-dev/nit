@@ -14,7 +14,6 @@ from nit.utils.platform_client import (
     PlatformClientError,
     PlatformRuntimeConfig,
     build_bugs_url,
-    build_llm_proxy_base_url,
     build_memory_url,
     build_reports_url,
     build_usage_url,
@@ -25,13 +24,6 @@ from nit.utils.platform_client import (
 )
 
 # ── URL builders ──────────────────────────────────────────────────
-
-
-def test_build_llm_proxy_base_url_default_path() -> None:
-    assert (
-        build_llm_proxy_base_url("https://platform.getnit.dev")
-        == "https://platform.getnit.dev/api/v1/llm-proxy"
-    )
 
 
 def test_build_reports_url_handles_api_base_path() -> None:

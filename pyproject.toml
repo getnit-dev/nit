@@ -154,6 +154,12 @@ select = [
 # Usage callback: lazy import for optional Sentry metrics
 "src/nit/llm/usage_callback.py" = ["PLC0415"]
 # Analytics queries: event formatter naturally requires multiple return statements
+# Security analyzer: lazy imports to break circular dependencies between security modules
+"**/agents/analyzers/security.py" = ["PLC0415"]
+# Security patterns base: lazy loading of all pattern modules to avoid circular imports
+"**/agents/analyzers/security_patterns/base.py" = ["PLC0415"]
+# Terminal reporter: lazy import of security types to avoid circular imports
+"**/agents/reporters/terminal.py" = ["PLC0415"]
 "src/nit/memory/analytics_queries.py" = ["PLR0911"]
 
 [tool.mypy]

@@ -591,10 +591,10 @@ def _mock_disabled_config() -> MagicMock:
 def _mock_platform_config() -> MagicMock:
     """Build a mock NitConfig with platform enabled."""
     config = MagicMock()
-    config.platform.normalized_mode = "platform"
+    config.platform.normalized_mode = "byok"
     config.platform.url = "https://platform.getnit.dev"
     config.platform.api_key = "nit_test_key"
-    config.platform.mode = "platform"
+    config.platform.mode = "byok"
     config.platform.user_id = "user-1"
     config.platform.project_id = "proj-1"
     config.platform.key_hash = "hash-1"

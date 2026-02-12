@@ -19,7 +19,7 @@ testing:
 
 # LLM provider configuration
 llm:
-  provider: openai                 # openai, anthropic, ollama
+  provider: openai                 # openai, anthropic, gemini, openrouter, bedrock, vertex_ai, azure
   model: gpt-4o                    # Model identifier
   api_key: ${OPENAI_API_KEY}       # Supports ${ENV_VAR} expansion
   base_url: ""                     # Custom base URL (Ollama, proxy)
@@ -64,7 +64,7 @@ coverage:
 platform:
   url: ""                          # Platform base URL
   api_key: ""                      # Platform API key
-  mode: ""                         # platform, byok, disabled
+  mode: ""                         # byok, disabled
   user_id: ""                      # User ID for usage metadata
   project_id: ""                   # Project ID for reports
   key_hash: ""                     # Key hash override
@@ -111,6 +111,14 @@ pipeline:
 execution:
   parallel_shards: 4               # Number of parallel shards
   min_files_for_sharding: 8        # Min files to enable sharding
+
+# Security analysis
+security:
+  enabled: true                    # Enable security scanning (default: true)
+  llm_validation: true             # Validate findings via LLM (default: true)
+  confidence_threshold: 0.7        # Min confidence to report (0.0-1.0)
+  severity_threshold: medium       # Min severity: critical, high, medium, low, info
+  exclude_patterns: []             # Glob patterns to skip (e.g., "vendor/*")
 
 # Sentry observability (opt-in)
 sentry:

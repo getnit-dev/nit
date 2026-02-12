@@ -136,14 +136,14 @@ class TestInit:
             patch("nit.cli.shutil.which", return_value="/usr/local/bin/claude"),
         ):
             # Provide input for interactive prompts:
-            # platform mode=3 (disabled), LLM mode=2 (Claude CLI),
+            # platform mode=2 (disabled), LLM mode=2 (Claude CLI),
             # Slack=n, Email=n, E2E=n, Auto-commit=n, Auto-PR=n,
             # Create issues=n, Create fix PRs=n, Configure coverage thresholds=n,
             # Report format=enter, Docs=n, Sentry=n, Advanced LLM=n
             result = runner.invoke(
                 cli,
                 ["init", "--linear", "--path", str(tmp_path)],
-                input="3\n2\nn\nn\nn\nn\nn\nn\nn\nn\n\nn\nn\nn\n",
+                input="2\n2\nn\nn\nn\nn\nn\nn\nn\nn\n\nn\nn\nn\n",
             )
 
         assert result.exit_code == 0, result.output
@@ -160,14 +160,14 @@ class TestInit:
         runner = CliRunner()
         with patch("nit.cli._is_interactive_terminal", return_value=True):
             # Provide input for interactive prompts:
-            # platform mode=3 (disabled), LLM mode=5 (Custom),
+            # platform mode=2 (disabled), LLM mode=6 (Custom),
             # Slack=n, Email=n, E2E=n, Auto-commit=n, Auto-PR=n,
             # Create issues=n, Create fix PRs=n, Configure coverage thresholds=n,
             # Report format=enter, Docs=n, Sentry=n, Advanced LLM=n
             result = runner.invoke(
                 cli,
                 ["init", "--linear", "--path", str(tmp_path)],
-                input="3\n5\nn\nn\nn\nn\nn\nn\nn\nn\n\nn\nn\nn\n",
+                input="2\n6\nn\nn\nn\nn\nn\nn\nn\nn\n\nn\nn\nn\n",
             )
 
         assert result.exit_code == 0, result.output
@@ -434,7 +434,7 @@ class TestConfig:
 
     def test_config_validate_platform_mode_requires_url(self, tmp_path: Path) -> None:
         (tmp_path / ".nit.yml").write_text(
-            "platform:\n  mode: platform\n  api_key: nit_key_123\n"
+            "platform:\n  mode: byok\n  api_key: nit_key_123\n"
             # Missing url
             "",
             encoding="utf-8",
@@ -3197,16 +3197,6 @@ class TestHelperFunctionsExtended:
         config.platform.normalized_mode = "disabled"
         assert _is_llm_runtime_configured(config) is False
 
-    def test_is_llm_runtime_configured_platform_proxy(self) -> None:
-        config = MagicMock()
-        config.llm.is_configured = False
-        config.llm.mode = "builtin"
-        config.llm.model = "gpt-4o"
-        config.platform.normalized_mode = "platform"
-        config.platform.url = "https://platform.getnit.dev"
-        config.platform.api_key = "key-123"
-        assert _is_llm_runtime_configured(config) is True
-
     def test_mask_sensitive_values_with_list(self) -> None:
         sensitive_key = "token"
         config: dict[str, Any] = {
@@ -3501,16 +3491,14 @@ class TestRenderFunctions:
     def test_render_platform_section(self) -> None:
         lines = _render_platform_section(
             {
-                "mode": "platform",
+                "mode": "byok",
                 "url": "https://platform.getnit.dev",
-                "llm_api_key": "key-123",
-                "reporting_api_key": "rep-456",
+                "api_key": "key-123",
             }
         )
         joined = "\n".join(lines)
-        assert "mode: platform" in joined
-        assert "llm_api_key:" in joined
-        assert "reporting_api_key:" in joined
+        assert "mode: byok" in joined
+        assert "url:" in joined
 
     def test_render_git_section(self) -> None:
         lines = _render_git_section(
@@ -3819,7 +3807,7 @@ class TestBuildPickReportPayload:
         config.llm.model = "gpt-4o"
         config.platform.url = "https://api.example.com"
         config.platform.api_key = "sk-test"
-        config.platform.mode = "platform"
+        config.platform.mode = "byok"
         config.platform.user_id = ""
         config.platform.project_id = ""
         config.platform.key_hash = ""
@@ -4114,7 +4102,7 @@ class TestWriteComprehensiveNitYml:
 
         config_dict: dict[str, Any] = {
             "llm": {"mode": "builtin", "provider": "openai", "model": "gpt-4o"},
-            "platform": {"mode": "platform", "url": "https://example.com", "api_key": "sk-123"},
+            "platform": {"mode": "byok", "url": "https://example.com", "api_key": "sk-123"},
             "git": {"auto_commit": True},
             "report": {"format": "terminal"},
             "e2e": {"enabled": True, "base_url": "http://localhost:3000"},
@@ -4942,16 +4930,6 @@ class TestIsLlmRuntimeConfigured:
     def test_configured_directly(self) -> None:
         config = MagicMock()
         config.llm.is_configured = True
-        assert _is_llm_runtime_configured(config) is True
-
-    def test_builtin_platform_mode(self) -> None:
-        config = MagicMock()
-        config.llm.is_configured = False
-        config.llm.mode = "builtin"
-        config.platform.normalized_mode = "platform"
-        config.llm.model = "gpt-4o"
-        config.platform.url = "https://api.example.com"
-        config.platform.api_key = "sk-test"
         assert _is_llm_runtime_configured(config) is True
 
     def test_not_configured(self) -> None:

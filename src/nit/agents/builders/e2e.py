@@ -23,6 +23,7 @@ from nit.agents.healers.self_healing import HealingResult, SelfHealingEngine
 from nit.llm.context import AssembledContext, ContextAssembler
 from nit.llm.engine import GenerationRequest, LLMMessage
 from nit.memory.global_memory import GlobalMemory
+from nit.memory.helpers import get_memory_context, inject_memory_into_messages, record_outcome
 from nit.parsing.treesitter import ParseResult
 
 if TYPE_CHECKING:
@@ -192,6 +193,15 @@ class E2EBuilder(BaseAgent):
             prompt_template = adapter.get_prompt_template()
             rendered_prompt = prompt_template.render(context)
 
+            # Step 3.5: Inject memory patterns into prompt
+            memory_context = get_memory_context(
+                self._memory,
+                known_filter_key="language",
+                failed_filter_key="framework",
+                filter_value="playwright",
+            )
+            inject_memory_into_messages(rendered_prompt.messages, memory_context)
+
             logger.debug(
                 "Rendered E2E prompt with %d messages",
                 len(rendered_prompt.messages),
@@ -220,6 +230,15 @@ class E2EBuilder(BaseAgent):
                 validation_result = adapter.validate_test(test_code)
 
             # Step 6: Update memory
+            record_outcome(
+                self._memory,
+                successful=validation_result.valid,
+                domain="e2e_test",
+                context_dict={"framework": "playwright", "route": task.route_path},
+                error_message=(
+                    "\n".join(validation_result.errors) if not validation_result.valid else ""
+                ),
+            )
             if self._memory:
                 self._memory.update_stats(
                     successful=validation_result.valid,

@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING, Any
 from nit.agents.base import BaseAgent, TaskInput, TaskOutput, TaskStatus
 from nit.llm.engine import GenerationRequest
 from nit.llm.prompts.semantic_gap import SemanticGapContext, SemanticGapPrompt
+from nit.memory.global_memory import GlobalMemory
+from nit.memory.helpers import get_memory_context, inject_memory_into_messages, record_outcome
 
 if TYPE_CHECKING:
     from nit.agents.analyzers.coverage import CoverageGapReport, FunctionGap
@@ -121,6 +123,7 @@ class SemanticGapDetector(BaseAgent):
         self.confidence_threshold = confidence_threshold
         self.max_functions = max_functions
         self._cache: dict[str, list[SemanticGap]] = {}
+        self._memory: GlobalMemory | None = GlobalMemory(project_root)
 
     @property
     def name(self) -> str:
@@ -193,6 +196,13 @@ class SemanticGapDetector(BaseAgent):
 
             logger.info("Found %d semantic gaps", len(gaps))
 
+            record_outcome(
+                self._memory,
+                successful=True,
+                domain="semantic_gap",
+                context_dict={"domain": "analysis", "gaps_found": len(gaps)},
+            )
+
             return TaskOutput(
                 status=TaskStatus.COMPLETED,
                 result={
@@ -203,6 +213,13 @@ class SemanticGapDetector(BaseAgent):
 
         except Exception as e:
             logger.exception("Semantic gap detection failed: %s", e)
+            record_outcome(
+                self._memory,
+                successful=False,
+                domain="semantic_gap",
+                context_dict={"domain": "analysis"},
+                error_message=str(e),
+            )
             return TaskOutput(
                 status=TaskStatus.FAILED,
                 errors=[str(e)],
@@ -396,6 +413,15 @@ class SemanticGapDetector(BaseAgent):
         # Render prompt
         prompt_template = SemanticGapPrompt()
         rendered = prompt_template.render_gap_analysis(gap_context)
+
+        # Inject memory patterns
+        memory_context = get_memory_context(
+            self._memory,
+            known_filter_key="domain",
+            failed_filter_key="domain",
+            filter_value="analysis",
+        )
+        inject_memory_into_messages(rendered.messages, memory_context)
 
         # Call LLM
         request = GenerationRequest(messages=rendered.messages)

@@ -12,12 +12,11 @@ import requests
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-_LLM_PROXY_PATH = "/api/v1/llm-proxy"
 _REPORTS_PATH = "/api/v1/reports"
 _BUGS_PATH = "/api/v1/bugs"
 _USAGE_PATH = "/api/v1/usage"
 _MEMORY_PATH = "/api/v1/memory"
-_VALID_PLATFORM_MODES = {"platform", "byok", "disabled"}
+_VALID_PLATFORM_MODES = {"byok", "disabled"}
 _HTTP_SUCCESS_MIN = 200
 _HTTP_SUCCESS_MAX = 300
 
@@ -46,7 +45,7 @@ class PlatformRuntimeConfig:
         if raw in _VALID_PLATFORM_MODES:
             return raw
         if self.url and self.api_key:
-            return "platform"
+            return "byok"
         return "disabled"
 
 
@@ -70,11 +69,6 @@ def _join_platform_path(base_url: str, endpoint_path: str) -> str:
 
     joined_path = f"{base_path}{target_path}" if base_path else target_path
     return urlunsplit((split.scheme, split.netloc, joined_path, split.query, split.fragment))
-
-
-def build_llm_proxy_base_url(platform_url: str) -> str:
-    """Build the OpenAI-compatible proxy base URL for platform key mode."""
-    return _join_platform_path(platform_url, _LLM_PROXY_PATH)
 
 
 def build_reports_url(platform_url: str) -> str:

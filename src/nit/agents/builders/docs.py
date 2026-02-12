@@ -31,6 +31,8 @@ from nit.llm.prompts.doc_generation import (
     build_doc_generation_messages,
     build_mismatch_detection_messages,
 )
+from nit.memory.global_memory import GlobalMemory
+from nit.memory.helpers import get_memory_context, inject_memory_into_messages, record_outcome
 from nit.memory.store import MemoryStore
 from nit.parsing.languages import extract_from_file
 from nit.parsing.treesitter import detect_language
@@ -185,6 +187,7 @@ class DocBuilder(BaseAgent):
         *,
         max_tokens: int = 4096,
         docs_config: DocsConfig | None = None,
+        enable_memory: bool = True,
     ) -> None:
         """Initialize the DocBuilder agent.
 
@@ -193,12 +196,14 @@ class DocBuilder(BaseAgent):
             project_root: Root directory of the project.
             max_tokens: Maximum tokens for doc generation.
             docs_config: Documentation generation configuration.
+            enable_memory: Whether to use GlobalMemory for pattern learning.
         """
         self._llm = llm_engine
         self._root = project_root
         self._docs_config = docs_config
         self._max_tokens = docs_config.max_tokens if docs_config else max_tokens
         self._registry = get_registry()
+        self._global_memory = GlobalMemory(project_root) if enable_memory else None
 
         # Doc state memory store
         self._doc_state_store: MemoryStore[dict[str, dict[str, Any]]] = MemoryStore(
@@ -321,6 +326,14 @@ class DocBuilder(BaseAgent):
             has_errors = any(r.errors for r in results)
             status = TaskStatus.FAILED if has_errors else TaskStatus.COMPLETED
 
+            total_docs = sum(len(r.generated_docs) for r in results)
+            record_outcome(
+                self._global_memory,
+                successful=not has_errors,
+                domain="doc_generation",
+                context_dict={"domain": "docs", "docs_generated": total_docs},
+            )
+
             return TaskOutput(
                 status=status,
                 result={"results": [self._result_to_dict(r) for r in results]},
@@ -329,6 +342,13 @@ class DocBuilder(BaseAgent):
 
         except Exception as e:
             logger.exception("Documentation generation failed")
+            record_outcome(
+                self._global_memory,
+                successful=False,
+                domain="doc_generation",
+                context_dict={"domain": "docs"},
+                error_message=str(e),
+            )
             return TaskOutput(
                 status=TaskStatus.FAILED,
                 errors=[f"Documentation generation failed: {e}"],
@@ -749,6 +769,14 @@ class DocBuilder(BaseAgent):
 
         messages = build_doc_generation_messages(doc_context)
 
+        memory_context = get_memory_context(
+            self._global_memory,
+            known_filter_key="domain",
+            failed_filter_key="domain",
+            filter_value="docs",
+        )
+        inject_memory_into_messages(messages, memory_context)
+
         request = GenerationRequest(
             messages=messages,
             max_tokens=self._max_tokens,
@@ -894,6 +922,16 @@ class DocBuilder(BaseAgent):
             doc_framework=doc_framework,
             source_code=source_code,
             source_path=file_path,
+        )
+
+        inject_memory_into_messages(
+            messages,
+            get_memory_context(
+                self._global_memory,
+                known_filter_key="domain",
+                failed_filter_key="domain",
+                filter_value="docs",
+            ),
         )
 
         request = GenerationRequest(

@@ -166,9 +166,8 @@ class BuiltinLLM(LLMEngine):
             metadata_overrides.update(extra_metadata)
             extra.pop("metadata", None)
 
-        usage_source = "api" if self._is_platform_proxy_request() else "byok"
-        # Platform proxy requests are already tracked server-side in the Worker.
-        emit_usage = usage_source != "api"
+        usage_source = "byok"
+        emit_usage = True
 
         metadata = build_litellm_metadata(
             MetadataParams(
@@ -307,13 +306,6 @@ class BuiltinLLM(LLMEngine):
     def _estimate_prompt_tokens(self, messages: list[LLMMessage], model: str) -> int:
         joined = "\n".join(f"{message.role}: {message.content}" for message in messages)
         return max(self.count_tokens(joined, model=model), 0)
-
-    def _is_platform_proxy_request(self) -> bool:
-        if not self._base_url:
-            return False
-
-        normalized = self._base_url.lower()
-        return "/api/v1/llm-proxy" in normalized or normalized.rstrip("/").endswith("/llm-proxy")
 
     @staticmethod
     def _parse_response(raw: Any, model: str) -> LLMResponse:

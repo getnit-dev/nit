@@ -19,11 +19,13 @@ from nit.auto_init import (
     _detect_claude_project_dir,
     _detect_codex_cli,
     _detect_e2e_base_url,
+    _detect_gemini_api_key,
     _detect_llm,
     _detect_nit_llm_api_key,
     _detect_ollama_host_env,
     _detect_ollama_running,
     _detect_openai_api_key,
+    _detect_openrouter_api_key,
     _detect_platform,
     _detect_sentry,
     _extract_port_from_script,
@@ -77,6 +79,40 @@ class TestLLMEnvDetection:
     def test_nit_llm_key_absent(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
             config, _source = _detect_nit_llm_api_key()
+        assert config == {}
+
+    def test_gemini_key_present(self) -> None:
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "gemini-key"}, clear=True):
+            config, source = _detect_gemini_api_key()
+        assert config["provider"] == "gemini"
+        assert config["model"] == "gemini-2.0-flash"
+        assert config["api_key"] == "${GEMINI_API_KEY}"
+        assert "GEMINI_API_KEY" in source
+
+    def test_gemini_key_via_google_api_key(self) -> None:
+        with patch.dict("os.environ", {"GOOGLE_API_KEY": "google-key"}, clear=True):
+            config, source = _detect_gemini_api_key()
+        assert config["provider"] == "gemini"
+        assert config["api_key"] == "${GOOGLE_API_KEY}"
+        assert "GOOGLE_API_KEY" in source
+
+    def test_gemini_key_absent(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            config, _source = _detect_gemini_api_key()
+        assert config == {}
+
+    def test_openrouter_key_present(self) -> None:
+        with patch.dict("os.environ", {"OPENROUTER_API_KEY": "sk-or-test"}, clear=True):
+            config, source = _detect_openrouter_api_key()
+        assert config["provider"] == "openrouter"
+        assert config["model"] == "openrouter/auto"
+        assert config["api_key"] == "${OPENROUTER_API_KEY}"
+        assert config["base_url"] == "https://openrouter.ai/api/v1"
+        assert "OPENROUTER_API_KEY" in source
+
+    def test_openrouter_key_absent(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            config, _source = _detect_openrouter_api_key()
         assert config == {}
 
 
@@ -233,7 +269,7 @@ class TestPlatformDetection:
             },
         ):
             config, _source = _detect_platform()
-        assert config["mode"] == "platform"
+        assert config["mode"] == "byok"
         assert config["api_key"] == "${NIT_PLATFORM_API_KEY}"
 
     def test_platform_key_without_url(self) -> None:

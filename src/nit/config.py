@@ -225,10 +225,10 @@ class PlatformConfig:
     def normalized_mode(self) -> str:
         """Resolve platform mode with defaults."""
         mode = self.mode.strip().lower()
-        if mode in {"platform", "byok", "disabled"}:
+        if mode in {"byok", "disabled"}:
             return mode
         if self.url and self.api_key:
-            return "platform"
+            return "byok"
         return "disabled"
 
 
@@ -325,6 +325,26 @@ class SentryConfig:
 
 
 @dataclass
+class SecurityConfig:
+    """Security analysis configuration."""
+
+    enabled: bool = True
+    """Enable security analysis during pick pipeline."""
+
+    llm_validation: bool = True
+    """Use LLM to validate heuristic findings and reduce false positives."""
+
+    confidence_threshold: float = 0.7
+    """Minimum confidence (0.0-1.0) to report a security finding."""
+
+    severity_threshold: str = "medium"
+    """Minimum severity to report: critical, high, medium, low, info."""
+
+    exclude_patterns: list[str] = field(default_factory=list)
+    """File glob patterns to exclude from security scanning."""
+
+
+@dataclass
 class PipelineConfig:
     """Pipeline execution configuration."""
 
@@ -414,6 +434,9 @@ class NitConfig:
 
     sentry: SentryConfig = field(default_factory=SentryConfig)
     """Sentry observability configuration."""
+
+    security: SecurityConfig = field(default_factory=SecurityConfig)
+    """Security analysis configuration."""
 
     packages: dict[str, dict[str, Any]] = field(default_factory=dict)
     """Per-package configuration overrides."""
@@ -571,6 +594,24 @@ def _parse_sentry_config(raw: dict[str, Any]) -> SentryConfig:
     )
 
 
+def _parse_security_config(raw: dict[str, Any]) -> SecurityConfig:
+    """Parse security analysis configuration from raw YAML."""
+    security_raw = raw.get("security", {})
+    if not isinstance(security_raw, dict):
+        security_raw = {}
+
+    exclude_raw = security_raw.get("exclude_patterns", [])
+    exclude_patterns = [str(p) for p in exclude_raw] if isinstance(exclude_raw, list) else []
+
+    return SecurityConfig(
+        enabled=bool(security_raw.get("enabled", True)),
+        llm_validation=bool(security_raw.get("llm_validation", True)),
+        confidence_threshold=float(security_raw.get("confidence_threshold", 0.7)),
+        severity_threshold=str(security_raw.get("severity_threshold", "medium")),
+        exclude_patterns=exclude_patterns,
+    )
+
+
 def load_config(root: str | Path) -> NitConfig:
     """Load and parse the complete ``.nit.yml`` configuration.
 
@@ -705,6 +746,8 @@ def load_config(root: str | Path) -> NitConfig:
 
     sentry = _parse_sentry_config(raw)
 
+    security = _parse_security_config(raw)
+
     packages_raw = raw.get("packages", {})
     if not isinstance(packages_raw, dict):
         packages_raw = {}
@@ -723,6 +766,7 @@ def load_config(root: str | Path) -> NitConfig:
         pipeline=pipeline,
         execution=execution,
         sentry=sentry,
+        security=security,
         packages=packages_raw,
         raw=raw,
     )
@@ -816,16 +860,14 @@ def _validate_platform_config(platform: PlatformConfig) -> list[str]:
     errors: list[str] = []
     platform_mode = platform.normalized_mode
 
-    if platform_mode not in {"platform", "byok", "disabled"}:
-        errors.append(
-            f"platform.mode must be one of: platform, byok, disabled (got: {platform.mode})"
-        )
+    if platform_mode not in {"byok", "disabled"}:
+        errors.append(f"platform.mode must be one of: byok, disabled (got: {platform.mode})")
 
-    if platform_mode in {"platform", "byok"}:
+    if platform_mode == "byok":
         if not platform.url:
-            errors.append("platform.url is required when platform.mode is platform or byok")
+            errors.append("platform.url is required when platform.mode is byok")
         if not platform.api_key:
-            errors.append("platform.api_key is required when platform.mode is platform or byok")
+            errors.append("platform.api_key is required when platform.mode is byok")
 
     return errors
 
@@ -902,6 +944,27 @@ def _validate_sentry_config(sentry: SentryConfig) -> list[str]:
     return errors
 
 
+def _validate_security_config(security: SecurityConfig) -> list[str]:
+    """Validate security analysis settings."""
+    errors: list[str] = []
+
+    if not 0.0 <= security.confidence_threshold <= 1.0:
+        errors.append(
+            f"security.confidence_threshold must be between 0.0 and 1.0 "
+            f"(got: {security.confidence_threshold})"
+        )
+
+    valid_severities = {"critical", "high", "medium", "low", "info"}
+    if security.severity_threshold not in valid_severities:
+        errors.append(
+            f"security.severity_threshold must be one of: "
+            f"{', '.join(sorted(valid_severities))} "
+            f"(got: {security.severity_threshold})"
+        )
+
+    return errors
+
+
 def validate_config(config: NitConfig) -> list[str]:
     """Validate the configuration and return a list of error messages.
 
@@ -917,6 +980,7 @@ def validate_config(config: NitConfig) -> list[str]:
     errors.extend(_validate_coverage_config(config.coverage))
     errors.extend(_validate_pipeline_config(config.pipeline))
     errors.extend(_validate_sentry_config(config.sentry))
+    errors.extend(_validate_security_config(config.security))
 
     # Validate global E2E auth config
     if config.e2e.auth.strategy:

@@ -83,10 +83,6 @@ class Step1Platform(StepContainer):
         yield Label("Platform Mode:", classes="field-label")
         with RadioSet(id="platform_mode"):
             yield RadioButton(
-                "Platform Mode - Managed keys via proxy",
-                id="mode_platform",
-            )
-            yield RadioButton(
                 "BYOK - Bring Your Own Key + platform reporting",
                 id="mode_byok",
             )
@@ -126,7 +122,8 @@ class Step2LLM(StepContainer):
             options=[
                 ("Built-in (API)", "builtin"),
                 ("Claude CLI", "cli"),
-                ("Ollama", "ollama"),
+                ("Ollama (local)", "ollama"),
+                ("LM Studio (local)", "lmstudio"),
                 ("Custom Command", "custom"),
             ],
             value="builtin",
@@ -138,9 +135,14 @@ class Step2LLM(StepContainer):
             yield Label("Provider:", classes="field-label")
             yield Select[str](
                 options=[
-                    ("OpenAI (GPT-4, etc.)", "openai"),
+                    ("OpenAI (GPT-4o, etc.)", "openai"),
                     ("Anthropic (Claude)", "anthropic"),
-                    ("Ollama (Local)", "ollama"),
+                    ("Google Gemini", "gemini"),
+                    ("OpenRouter (multi-provider)", "openrouter"),
+                    ("AWS Bedrock", "bedrock"),
+                    ("Google Vertex AI", "vertex_ai"),
+                    ("Azure OpenAI", "azure"),
+                    ("Custom (OpenAI-compatible)", "custom_endpoint"),
                 ],
                 value="openai",
                 id="llm_provider",
@@ -152,6 +154,13 @@ class Step2LLM(StepContainer):
                 placeholder="Or use NIT_LLM_API_KEY environment variable",
                 password=True,
                 id="llm_api_key",
+                classes="field-input",
+            )
+
+            yield Label("Base URL (optional):", classes="field-label")
+            yield Input(
+                placeholder="e.g., https://openrouter.ai/api/v1",
+                id="llm_base_url",
                 classes="field-input",
             )
 
@@ -167,7 +176,7 @@ class Step2LLM(StepContainer):
     def _on_mode_changed(self, event: Select.Changed) -> None:
         """Show/hide provider and API key fields based on selected mode."""
         api_fields = self.query_one("#llm-api-fields", Vertical)
-        api_fields.display = event.value == "builtin"
+        api_fields.display = event.value in {"builtin", "lmstudio"}
 
 
 class Step3Git(StepContainer):
@@ -623,7 +632,7 @@ class ConfigWizard(App[dict[str, Any] | None]):
 
     def _collect_platform(self) -> None:
         platform_mode_btn = self.query_one("#platform_mode", RadioSet).pressed_button
-        mode_map = {"mode_platform": "platform", "mode_byok": "byok"}
+        mode_map = {"mode_byok": "byok"}
         platform_mode = "disabled"
         if platform_mode_btn and platform_mode_btn.id:
             platform_mode = mode_map.get(platform_mode_btn.id, "disabled")
@@ -634,11 +643,26 @@ class ConfigWizard(App[dict[str, Any] | None]):
         }
 
     def _collect_llm(self) -> None:
+        mode = str(self.query_one("#llm_mode", Select).value)
+        provider = str(self.query_one("#llm_provider", Select).value)
+        base_url = self.query_one("#llm_base_url", Input).value
+
+        # LM Studio uses builtin mode with openai provider and a fixed base URL
+        if mode == "lmstudio":
+            mode = "builtin"
+            provider = "openai"
+            base_url = base_url or "http://localhost:1234/v1"
+
+        # Custom endpoint uses builtin mode
+        if provider == "custom_endpoint":
+            provider = "openai"
+
         self.config_data["llm"] = {
-            "provider": str(self.query_one("#llm_provider", Select).value),
+            "provider": provider,
             "model": self.query_one("#llm_model", Input).value,
             "api_key": self.query_one("#llm_api_key", Input).value,
-            "mode": str(self.query_one("#llm_mode", Select).value),
+            "mode": mode,
+            "base_url": base_url,
         }
 
     def _collect_git(self) -> None:

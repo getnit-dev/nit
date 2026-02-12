@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING
 from nit.agents.base import BaseAgent, TaskInput, TaskOutput, TaskStatus
 from nit.llm.engine import GenerationRequest
 from nit.llm.prompts.bug_analysis import BugAnalysisContext, BugAnalysisPrompt
+from nit.memory.global_memory import GlobalMemory
+from nit.memory.helpers import get_memory_context, inject_memory_into_messages, record_outcome
 
 if TYPE_CHECKING:
     from nit.adapters.base import CaseResult as TestCaseResult
@@ -255,6 +257,7 @@ class BugAnalyzer(BaseAgent):
         enable_llm_analysis: bool = True,
         llm_confidence_threshold: float = 0.7,
         project_root: Path | None = None,
+        enable_memory: bool = True,
     ) -> None:
         """Initialize the BugAnalyzer.
 
@@ -263,12 +266,14 @@ class BugAnalyzer(BaseAgent):
             enable_llm_analysis: Whether to use LLM for UNKNOWN bugs (keyword-only).
             llm_confidence_threshold: Minimum confidence for LLM results (keyword-only).
             project_root: Project root directory for reading source files (keyword-only).
+            enable_memory: Whether to use GlobalMemory for pattern learning (keyword-only).
         """
         super().__init__()
         self.llm_engine = llm_engine
         self.enable_llm_analysis = enable_llm_analysis
         self.llm_confidence_threshold = llm_confidence_threshold
         self.project_root = project_root or Path.cwd()
+        self._memory = GlobalMemory(self.project_root) if enable_memory else None
 
     @property
     def name(self) -> str:
@@ -362,6 +367,13 @@ class BugAnalyzer(BaseAgent):
                 severity.value,
             )
 
+            record_outcome(
+                self._memory,
+                successful=True,
+                domain="bug_analysis",
+                context_dict={"domain": "analysis", "bug_type": bug_type.value},
+            )
+
             return TaskOutput(
                 status=TaskStatus.COMPLETED,
                 result={
@@ -372,6 +384,13 @@ class BugAnalyzer(BaseAgent):
 
         except Exception as e:
             logger.exception("Bug analysis failed: %s", e)
+            record_outcome(
+                self._memory,
+                successful=False,
+                domain="bug_analysis",
+                context_dict={"domain": "analysis"},
+                error_message=str(e),
+            )
             return TaskOutput(
                 status=TaskStatus.FAILED,
                 errors=[f"Bug analysis error: {e}"],
@@ -623,6 +642,15 @@ class BugAnalyzer(BaseAgent):
 
             prompt = BugAnalysisPrompt()
             rendered = prompt.render_bug_analysis(context)
+
+            # Inject memory patterns
+            memory_context = get_memory_context(
+                self._memory,
+                known_filter_key="domain",
+                failed_filter_key="domain",
+                filter_value="analysis",
+            )
+            inject_memory_into_messages(rendered.messages, memory_context)
 
             # Call LLM
             request = GenerationRequest(messages=rendered.messages)

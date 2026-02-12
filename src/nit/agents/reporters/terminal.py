@@ -919,6 +919,80 @@ class CLIReporter:
 
         self.console.print(table)
 
+    # ── Security reporting ────────────────────────────────────────────
+
+    def print_security_summary(self, security_report: object) -> None:
+        """Print a compact security analysis summary.
+
+        Args:
+            security_report: A SecurityReport instance (typed as object to
+                avoid importing the module at top level).
+        """
+        from nit.agents.analyzers.security import SecurityReport, SecuritySeverity
+
+        if not isinstance(security_report, SecurityReport):
+            return
+        if not security_report.findings:
+            self.console.print("  [green]No security issues found[/green]")
+            return
+
+        critical = security_report.critical_count
+        high = security_report.high_count
+        total = len(security_report.findings)
+
+        if critical > 0:
+            self.console.print(
+                f"\n  [bold red]Security: {critical} CRITICAL, "
+                f"{high} HIGH ({total} total)[/bold red]"
+            )
+        elif high > 0:
+            self.console.print(
+                f"\n  [bold yellow]Security: {high} HIGH ({total} total)[/bold yellow]"
+            )
+        else:
+            self.console.print(
+                f"\n  [green]Security: {total} finding(s), none critical/high[/green]"
+            )
+
+        # Top findings table
+        max_security_display = 5
+        top = security_report.findings[:max_security_display]
+
+        table = Table(show_header=True, show_lines=False, padding=(0, 1))
+        table.add_column("Sev", justify="center", width=8)
+        table.add_column("Type", width=22)
+        table.add_column("File", width=35)
+        table.add_column("Line", justify="right", width=5)
+        table.add_column("Conf", justify="right", width=5)
+
+        severity_color_map = {
+            SecuritySeverity.CRITICAL: "red",
+            SecuritySeverity.HIGH: "yellow",
+            SecuritySeverity.MEDIUM: "blue",
+            SecuritySeverity.LOW: "dim",
+            SecuritySeverity.INFO: "dim",
+        }
+
+        for finding in top:
+            color = severity_color_map.get(finding.severity, "white")
+            file_path = self._strip_workdir(finding.file_path)
+            if len(file_path) > _MAX_FILE_PATH_LENGTH:
+                file_path = "..." + file_path[-(_MAX_FILE_PATH_LENGTH - 3) :]
+
+            table.add_row(
+                f"[{color}]{finding.severity.value.upper()}[/{color}]",
+                finding.vulnerability_type.value,
+                file_path,
+                str(finding.line_number) if finding.line_number else "?",
+                f"{finding.confidence:.0%}",
+            )
+
+        self.console.print(table)
+
+        remaining = total - len(top)
+        if remaining > 0:
+            self.console.print(f"  [dim]... and {remaining} more finding(s)[/dim]")
+
 
 # Singleton instance for easy import
 reporter = CLIReporter()
