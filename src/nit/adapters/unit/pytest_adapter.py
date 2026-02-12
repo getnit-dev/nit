@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import tempfile
 from pathlib import Path
 
@@ -127,7 +128,8 @@ class PytestAdapter(TestFrameworkAdapter):
         # Use a temp file for JSON report since --json-report-file=- doesn't work reliably
         json_report_file = None
         try:
-            _json_report_fd, json_report_path = tempfile.mkstemp(suffix=".json", prefix="pytest_")
+            json_report_fd, json_report_path = tempfile.mkstemp(suffix=".json", prefix="pytest_")
+            os.close(json_report_fd)
             json_report_file = Path(json_report_path)
 
             cmd = [

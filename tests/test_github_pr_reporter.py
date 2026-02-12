@@ -275,6 +275,8 @@ class TestGitHubPRReporter:
             assert "NullPointerException" in body
             assert "Review Checklist" in body
 
+    @mock.patch("nit.agents.reporters.github_pr._GIT_PATH", "git")
+    @mock.patch("nit.agents.reporters.github_pr._GH_PATH", "gh")
     @mock.patch("nit.agents.reporters.github_pr.is_gh_cli_available")
     @mock.patch("nit.agents.reporters.github_pr.get_remote_url")
     @mock.patch("nit.agents.reporters.github_pr.subprocess.run")
@@ -393,6 +395,8 @@ class TestGitHubPRReporter:
         assert result.success is False
         assert result.error == "No test files to commit"
 
+    @mock.patch("nit.agents.reporters.github_pr._GIT_PATH", "git")
+    @mock.patch("nit.agents.reporters.github_pr._GH_PATH", "gh")
     @mock.patch("nit.agents.reporters.github_pr.is_gh_cli_available")
     @mock.patch("nit.agents.reporters.github_pr.get_remote_url")
     @mock.patch("nit.agents.reporters.github_pr.subprocess.run")

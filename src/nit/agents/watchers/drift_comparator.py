@@ -332,7 +332,7 @@ class DriftComparator:
             raise ValueError(msg)
 
         # Compute dot product
-        dot_product = float(sum(a * b for a, b in zip(vec1, vec2, strict=False)))
+        dot_product = float(sum(a * b for a, b in zip(vec1, vec2, strict=True)))
 
         # Compute magnitudes
         mag1 = float(sum(a * a for a in vec1) ** 0.5)

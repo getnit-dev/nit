@@ -325,6 +325,7 @@ class TestGitHubIssueReporter:
             assert "Added null check" in body
             assert "https://github.com/test-owner/test-repo/pull/42" in body
 
+    @mock.patch("nit.agents.reporters.github_issue._GH_PATH", "gh")
     @mock.patch("nit.agents.reporters.github_issue.subprocess.run")
     @mock.patch("nit.agents.reporters.github_issue.is_gh_cli_available")
     @mock.patch("nit.agents.reporters.github_issue.get_remote_url")
@@ -417,6 +418,7 @@ class TestGitHubIssueReporter:
         assert result.issue_number == 789
         mock_api.create_issue.assert_called_once()
 
+    @mock.patch("nit.agents.reporters.github_issue._GH_PATH", "gh")
     @mock.patch("nit.agents.reporters.github_issue.subprocess.run")
     @mock.patch("nit.agents.reporters.github_issue.is_gh_cli_available")
     @mock.patch("nit.agents.reporters.github_issue.get_remote_url")

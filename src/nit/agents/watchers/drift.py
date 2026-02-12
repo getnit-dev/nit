@@ -8,7 +8,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 from nit.agents.base import BaseAgent, TaskInput, TaskOutput, TaskStatus
 from nit.agents.watchers.drift_comparator import CompareConfig, ComparisonType, DriftComparator
@@ -16,9 +17,6 @@ from nit.agents.watchers.drift_test import DriftTestExecutor, DriftTestParser, D
 from nit.llm.prompt_analysis import PromptOptimizer
 from nit.memory.analytics_collector import get_analytics_collector
 from nit.memory.drift_baselines import DriftBaselinesManager
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +153,11 @@ class DriftWatcher(BaseAgent):
             Drift report with all test results.
         """
         # Parse test specs
-        tests_path = self._project_root / tests_file if isinstance(tests_file, str) else tests_file
+        if isinstance(tests_file, str):
+            _p = Path(tests_file)
+            tests_path = _p if _p.is_absolute() else self._project_root / tests_file
+        else:
+            tests_path = tests_file
         specs = DriftTestParser.parse_file(tests_path)
 
         if not specs:
@@ -212,7 +214,11 @@ class DriftWatcher(BaseAgent):
             Report of baseline updates.
         """
         # Parse test specs
-        tests_path = self._project_root / tests_file if isinstance(tests_file, str) else tests_file
+        if isinstance(tests_file, str):
+            _p = Path(tests_file)
+            tests_path = _p if _p.is_absolute() else self._project_root / tests_file
+        else:
+            tests_path = tests_file
         specs = DriftTestParser.parse_file(tests_path)
 
         if not specs:
@@ -291,7 +297,11 @@ class DriftWatcher(BaseAgent):
 
             # Generate prompt optimization suggestions if drift detected (task 3.12.4)
             prompt_optimization = {}
-            if not comparison_result.passed and self._enable_prompt_optimization:
+            if (
+                not comparison_result.passed
+                and comparison_result.error is None
+                and self._enable_prompt_optimization
+            ):
                 prompt_optimization = self._generate_optimization_suggestions(
                     spec, baseline.output, output, comparison_result.similarity_score
                 )

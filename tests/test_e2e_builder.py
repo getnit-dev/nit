@@ -307,7 +307,7 @@ class TestResolvePath:
         tmp_path: Path,
     ) -> None:
         builder = E2EBuilder(_make_llm_engine(), tmp_path)
-        abs_path = "/abs/handler.ts"
+        abs_path = str(Path("/abs/handler.ts").resolve())
         result = builder._resolve_path(abs_path)
         assert result == Path(abs_path)
 

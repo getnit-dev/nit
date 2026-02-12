@@ -52,4 +52,8 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           git clone https://github.com/getnit-dev/examples.git /tmp/examples
-          EXAMPLES_DIR=/tmp/examples pytest tests/e2e/ -v
+          if [ -d tests/e2e ]; then
+            EXAMPLES_DIR=/tmp/examples pytest tests/e2e/ -v
+          else
+            echo "No tests/e2e directory found, skipping e2e tests"
+          fi

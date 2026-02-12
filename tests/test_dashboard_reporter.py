@@ -38,7 +38,7 @@ def test_generate_html_empty_data() -> None:
 
         assert dashboard_path.exists()
         assert dashboard_path.name == "index.html"
-        content = dashboard_path.read_text()
+        content = dashboard_path.read_text(encoding="utf-8")
         assert "nit Analytics Dashboard" in content
         assert "No coverage data available" in content
 
@@ -79,7 +79,7 @@ def test_generate_html_with_data() -> None:
         dashboard_path = reporter.generate_html()
 
         assert dashboard_path.exists()
-        content = dashboard_path.read_text()
+        content = dashboard_path.read_text(encoding="utf-8")
         assert "nit Analytics Dashboard" in content
         assert "80.0%" in content  # Line coverage
         assert "100" in content  # Total tests

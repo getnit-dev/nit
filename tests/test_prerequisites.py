@@ -415,14 +415,14 @@ class TestGetCommandPath:
         result = get_command_path("python", None)
         # python likely exists on the system
         if result is not None:
-            assert result.name == "python"
+            assert result.stem.lower() == "python"
 
     def test_empty_bin_path(self, tmp_path: Path) -> None:
         """Environment with no bin_path falls back to system."""
         env = Environment(type="python_venv", path=tmp_path, bin_path=None)
         result = get_command_path("python", env)
         # Just verify it doesn't crash; python may or may not exist
-        assert result is None or result.name == "python"
+        assert result is None or result.stem.lower() == "python"
 
 
 # ── Coverage: is_package_installed Python path ──────────────────

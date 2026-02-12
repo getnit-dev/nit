@@ -230,7 +230,7 @@ class TestFixVerifierRunSuccess:
 class TestResolveTarget:
     def test_absolute_path(self, tmp_path: Path) -> None:
         agent = FixVerifier(project_root=tmp_path)
-        abs_path = "/absolute/path/to/file.py"
+        abs_path = str(Path("/absolute/path/to/file.py").resolve())
         assert agent._resolve_target(abs_path) == Path(abs_path)
 
     def test_relative_path(self, tmp_path: Path) -> None:

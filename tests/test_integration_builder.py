@@ -615,8 +615,8 @@ def test_resolve_path_absolute(
         project_root=pytest_project,
         enable_memory=False,
     )
-    abs_path = Path("/absolute/path/file.py")
-    assert builder._resolve_path("/absolute/path/file.py") == abs_path
+    abs_path = Path("/absolute/path/file.py").resolve()
+    assert builder._resolve_path(str(abs_path)) == abs_path
 
 
 def test_resolve_path_relative(
