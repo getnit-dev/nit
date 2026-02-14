@@ -209,3 +209,7 @@ __marimo__/
 # Agents
 .claude/
 .nit/
+
+# Local planning docs
+docs/TODO.md
+docs/PLAN.md

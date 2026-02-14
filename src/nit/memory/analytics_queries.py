@@ -14,6 +14,7 @@ from nit.memory.global_memory import GlobalMemory
 from nit.models.analytics import EventType
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -286,7 +287,8 @@ class AnalyticsQueries:
             logger.exception("Failed to get activity timeline")
             return []
 
-    def _format_event_description(self, event: Any) -> str:
+    @staticmethod
+    def _format_event_description(event: Any) -> str:
         """Format a human-readable description for an event.
 
         Args:
@@ -295,22 +297,32 @@ class AnalyticsQueries:
         Returns:
             Human-readable description.
         """
-        if event.event_type == EventType.LLM_REQUEST and event.llm_usage:
-            model = event.llm_usage.model
-            provider = event.llm_usage.provider
-            tokens = event.llm_usage.total_tokens
-            return f"{provider}/{model}: {tokens} tokens"
-        if event.event_type == EventType.COVERAGE_RUN and event.coverage:
-            pct = event.coverage.overall_line_coverage * 100
-            return f"Coverage: {pct:.1f}%"
-        if event.event_type == EventType.BUG_DISCOVERED and event.bug:
-            return f"Bug discovered: {event.bug.title}"
-        if event.event_type == EventType.BUG_FIXED and event.bug:
-            return f"Bug fixed: {event.bug.title}"
-        if event.event_type == EventType.DRIFT_TEST and event.drift:
-            return f"Drift test: {event.drift.test_name} ({event.drift.similarity_score:.2f})"
-        if event.event_type == EventType.PR_CREATED:
-            return f"PR created: {event.pr_url}"
-        if event.event_type == EventType.ISSUE_CREATED:
-            return f"Issue created: {event.issue_url}"
+        formatters: dict[EventType, Callable[[Any], str | None]] = {
+            EventType.LLM_REQUEST: lambda e: (
+                f"{e.llm_usage.provider}/{e.llm_usage.model}: {e.llm_usage.total_tokens} tokens"
+                if e.llm_usage
+                else None
+            ),
+            EventType.COVERAGE_RUN: lambda e: (
+                f"Coverage: {e.coverage.overall_line_coverage * 100:.1f}%" if e.coverage else None
+            ),
+            EventType.BUG_DISCOVERED: lambda e: (
+                f"Bug discovered: {e.bug.title}" if e.bug else None
+            ),
+            EventType.BUG_FIXED: lambda e: (f"Bug fixed: {e.bug.title}" if e.bug else None),
+            EventType.DRIFT_TEST: lambda e: (
+                f"Drift test: {e.drift.test_name} ({e.drift.similarity_score:.2f})"
+                if e.drift
+                else None
+            ),
+            EventType.PR_CREATED: lambda e: f"PR created: {e.pr_url}",
+            EventType.ISSUE_CREATED: lambda e: f"Issue created: {e.issue_url}",
+        }
+
+        formatter = formatters.get(event.event_type)
+        if formatter is not None:
+            result = formatter(event)
+            if result is not None:
+                return result
+
         return str(event.event_type.value)

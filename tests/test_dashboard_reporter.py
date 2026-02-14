@@ -8,6 +8,7 @@ import pytest
 
 from nit.agents.reporters.dashboard import DashboardReporter
 from nit.memory.analytics_collector import AnalyticsCollector, reset_analytics_collector
+from nit.models.analytics import LLMUsage, TestExecutionSnapshot
 from nit.models.coverage import CoverageReport
 
 
@@ -53,16 +54,26 @@ def test_generate_html_with_data() -> None:
 
         # Add LLM usage
         collector.record_llm_usage(
-            provider="openai",
-            model="gpt-4",
-            prompt_tokens=100,
-            completion_tokens=50,
-            cost_usd=0.01,
+            LLMUsage(
+                provider="openai",
+                model="gpt-4",
+                prompt_tokens=100,
+                completion_tokens=50,
+                total_tokens=150,
+                cost_usd=0.01,
+            ),
         )
 
         # Add test execution
         collector.record_test_execution(
-            total=100, passed=95, failed=5, skipped=0, duration_ms=5000.0
+            TestExecutionSnapshot(
+                timestamp="2024-01-01T00:00:00+00:00",
+                total_tests=100,
+                passed_tests=95,
+                failed_tests=5,
+                skipped_tests=0,
+                total_duration_ms=5000.0,
+            ),
         )
 
         # Add coverage

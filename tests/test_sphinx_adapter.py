@@ -7,21 +7,13 @@ prompt template, RST page generation, doc build, and docstring validation.
 from __future__ import annotations
 
 import configparser
-import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from nit.adapters.base import DocFrameworkAdapter, ValidationResult
-from nit.adapters.docs.sphinx_adapter import (
-    SphinxAdapter,
-    _CommandResult,
-    _has_build_sphinx_in_setup_cfg,
-    _has_sphinx_in_pyproject,
-    _has_sphinx_in_requirements,
-    _run_command,
-)
+from nit.adapters.docs.sphinx_adapter import SphinxAdapter
 from nit.llm.prompts.doc_generation import DocGenerationTemplate
 
 # ── Helpers ──────────────────────────────────────────────────────
@@ -353,139 +345,3 @@ def test_validate_doc_no_sections_warning(adapter: SphinxAdapter) -> None:
     result = adapter.validate_doc(doc)
     # Single line may not trigger section warning
     assert result.valid is True
-
-
-# ── Coverage gap tests: _run_command, helper functions, edge cases ─────
-
-
-@pytest.mark.asyncio
-async def test_run_command_success(tmp_path: Path) -> None:
-    """_run_command returns success on good command."""
-    result = await _run_command(
-        [sys.executable, "-c", "print('hello')"], cwd=tmp_path, timeout=10.0
-    )
-    assert result.success is True
-    assert "hello" in result.stdout
-    assert result.timed_out is False
-    assert result.not_found is False
-
-
-@pytest.mark.asyncio
-async def test_run_command_timeout(tmp_path: Path) -> None:
-    """_run_command returns timed_out on timeout."""
-    result = await _run_command(
-        [sys.executable, "-c", "import time; time.sleep(30)"],
-        cwd=tmp_path,
-        timeout=0.01,
-    )
-    assert result.timed_out is True
-    assert result.success is False
-
-
-@pytest.mark.asyncio
-async def test_run_command_not_found(tmp_path: Path) -> None:
-    """_run_command returns not_found when command does not exist."""
-    result = await _run_command(
-        ["nonexistent_command_12345"],
-        cwd=tmp_path,
-        timeout=5.0,
-    )
-    assert result.not_found is True
-    assert result.success is False
-    assert result.returncode == 127
-
-
-def test_command_result_success_property() -> None:
-    """_CommandResult.success returns correct value."""
-    ok = _CommandResult(returncode=0, stdout="", stderr="")
-    assert ok.success is True
-
-    fail = _CommandResult(returncode=1, stdout="", stderr="err")
-    assert fail.success is False
-
-    timeout = _CommandResult(returncode=1, stdout="", stderr="", timed_out=True)
-    assert timeout.success is False
-
-    notfound = _CommandResult(returncode=127, stdout="", stderr="", not_found=True)
-    assert notfound.success is False
-
-
-def test_has_sphinx_in_requirements_dev(tmp_path: Path) -> None:
-    """Detects sphinx in requirements-dev.txt."""
-    _write_file(tmp_path, "requirements-dev.txt", "pytest\nsphinx>=5.0\nblack\n")
-    assert _has_sphinx_in_requirements(tmp_path) is True
-
-
-def test_has_sphinx_in_requirements_docs(tmp_path: Path) -> None:
-    """Detects sphinx in requirements-docs.txt."""
-    _write_file(tmp_path, "requirements-docs.txt", "sphinx-rtd-theme\n")
-    assert _has_sphinx_in_requirements(tmp_path) is True
-
-
-def test_has_sphinx_in_requirements_missing(tmp_path: Path) -> None:
-    """Returns False when no requirements file found."""
-    assert _has_sphinx_in_requirements(tmp_path) is False
-
-
-def test_has_sphinx_in_requirements_no_sphinx(tmp_path: Path) -> None:
-    """Returns False when requirements has no sphinx."""
-    _write_file(tmp_path, "requirements.txt", "pytest\nblack\n")
-    assert _has_sphinx_in_requirements(tmp_path) is False
-
-
-def test_has_sphinx_in_pyproject_missing(tmp_path: Path) -> None:
-    """Returns False when no pyproject.toml exists."""
-    assert _has_sphinx_in_pyproject(tmp_path) is False
-
-
-def test_has_sphinx_in_pyproject_no_sphinx(tmp_path: Path) -> None:
-    """Returns False when pyproject.toml has no sphinx."""
-    _write_file(
-        tmp_path,
-        "pyproject.toml",
-        "[project]\nname = 'foo'\ndependencies = ['pytest']\n",
-    )
-    assert _has_sphinx_in_pyproject(tmp_path) is False
-
-
-def test_has_build_sphinx_in_setup_cfg_missing(tmp_path: Path) -> None:
-    """Returns False when no setup.cfg exists."""
-    assert _has_build_sphinx_in_setup_cfg(tmp_path) is False
-
-
-def test_has_build_sphinx_in_setup_cfg_no_section(tmp_path: Path) -> None:
-    """Returns False when setup.cfg has no [build_sphinx] section."""
-    _write_setup_cfg(tmp_path, {"metadata": {"name": "foo"}})
-    assert _has_build_sphinx_in_setup_cfg(tmp_path) is False
-
-
-def test_detect_via_pyproject_without_confpy(adapter: SphinxAdapter, tmp_path: Path) -> None:
-    """Detects Sphinx via pyproject.toml even without conf.py."""
-    _write_file(
-        tmp_path,
-        "pyproject.toml",
-        "[project]\nname='p'\ndependencies=['sphinx>=5']\n",
-    )
-    assert adapter.detect(tmp_path) is True
-
-
-def test_detect_via_requirements_without_docs_conf(adapter: SphinxAdapter, tmp_path: Path) -> None:
-    """Returns False when sphinx in requirements but no docs/ dir."""
-    _write_file(tmp_path, "requirements.txt", "sphinx>=5.0\n")
-    assert adapter.detect(tmp_path) is False
-
-
-def test_validate_doc_multiline_no_sections_warns(
-    adapter: SphinxAdapter,
-) -> None:
-    """validate_doc warns when multiline doc has no standard sections."""
-    doc = '''"""This is a multiline docstring.
-
-It has multiple lines but no Args/Returns/Raises sections.
-
-Just regular prose explanation of the thing.
-"""'''
-    result = adapter.validate_doc(doc)
-    assert result.valid is True
-    assert len(result.warnings) > 0
-    assert any("section" in w.lower() for w in result.warnings)

@@ -143,6 +143,7 @@ class UnitBuilder(BaseAgent):
         self._context_assembler = ContextAssembler(
             root=project_root,
             max_context_tokens=max_context_tokens,
+            token_counter=llm_engine.count_tokens,
         )
         self._registry = get_registry()
         self._enable_memory = enable_memory
@@ -230,7 +231,15 @@ class UnitBuilder(BaseAgent):
             )
 
             # Step 5: Call LLM to generate test code
-            request = GenerationRequest(messages=rendered_prompt.messages)
+            request = GenerationRequest(
+                messages=rendered_prompt.messages,
+                metadata={
+                    "nit_source_file": task.source_file,
+                    "nit_template_name": prompt_template.name,
+                    "nit_builder_name": self.name,
+                    "nit_framework": task.framework,
+                },
+            )
             response = await self._llm.generate(request)
             test_code = response.text.strip()
 

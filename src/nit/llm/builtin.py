@@ -235,14 +235,14 @@ class BuiltinLLM(LLMEngine):
 
     # ── Token counting ────────────────────────────────────────────
 
-    def count_tokens(self, text: str, *, model: str | None = None) -> int:
+    def count_tokens(self, text: str) -> int:
         """Estimate the token count for *text* using LiteLLM's tokeniser."""
         try:
-            count: int = litellm.token_counter(model=model or self._model, text=text)
+            count: int = litellm.token_counter(model=self._model, text=text)
             return count
         except Exception:
             # Rough fallback: ~4 chars per token
-            return len(text) // 4
+            return max(1, len(text) // 4)
 
     # ── Internal helpers ──────────────────────────────────────────
 
@@ -303,9 +303,9 @@ class BuiltinLLM(LLMEngine):
         delay = self._retry.base_delay * (self._retry.backoff_factor**attempt)
         return min(delay, self._retry.max_delay)
 
-    def _estimate_prompt_tokens(self, messages: list[LLMMessage], model: str) -> int:
+    def _estimate_prompt_tokens(self, messages: list[LLMMessage], _model: str) -> int:
         joined = "\n".join(f"{message.role}: {message.content}" for message in messages)
-        return max(self.count_tokens(joined, model=model), 0)
+        return max(self.count_tokens(joined), 0)
 
     @staticmethod
     def _parse_response(raw: Any, model: str) -> LLMResponse:

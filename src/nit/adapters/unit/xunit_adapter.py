@@ -7,7 +7,6 @@ dotnet test and TRX result format.
 from __future__ import annotations
 
 import asyncio
-import logging
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -22,7 +21,6 @@ from nit.adapters.base import (
     TestFrameworkAdapter,
     ValidationResult,
 )
-from nit.adapters.coverage.coverlet_adapter import CoverletAdapter
 from nit.llm.prompts.xunit_prompt import XUnitTemplate
 from nit.parsing.treesitter import (
     collect_error_ranges,
@@ -34,8 +32,6 @@ if TYPE_CHECKING:
     from pathlib import Path
     from xml.etree.ElementTree import Element as XmlElement
 
-
-logger = logging.getLogger(__name__)
 _CSHARP_LANGUAGE = "csharp"
 _DURATION_MS_SCALE = 1000.0
 _TRX_TIME_PARTS = 3
@@ -274,12 +270,10 @@ class XUnitAdapter(TestFrameworkAdapter):
         *,
         test_files: list[Path] | None = None,
         timeout: float = _DEFAULT_TIMEOUT,
-        collect_coverage: bool = True,
+        collect_coverage: bool = False,
     ) -> RunResult:
-        """Execute tests via dotnet test and parse TRX report.
-
-        Optionally collects coverage using CoverletAdapter.
-        """
+        """Execute tests via dotnet test and parse TRX report."""
+        _ = collect_coverage  # Not yet implemented for xUnit
         target = _find_sln_or_csproj(project_path)
         if target is None:
             return RunResult(
@@ -290,17 +284,9 @@ class XUnitAdapter(TestFrameworkAdapter):
         log_dir = project_path / _TRX_LOG_DIR
         log_dir.mkdir(parents=True, exist_ok=True)
         trx_path = log_dir / _TRX_LOG_FILE
-        logger_arg = f"trx;LogFileName={_TRX_LOG_FILE}"
+        logger_arg = f"trx;LogFileName={_TRX_LOG_DIR}/{_TRX_LOG_FILE}"
 
-        cmd = [
-            "dotnet",
-            "test",
-            str(target),
-            "--logger",
-            logger_arg,
-            "--results-directory",
-            str(log_dir),
-        ]
+        cmd = ["dotnet", "test", str(target), "--logger", logger_arg]
         if test_files:
             filters = [p.stem for p in test_files if p.suffix == ".cs"]
             if filters:
@@ -308,38 +294,21 @@ class XUnitAdapter(TestFrameworkAdapter):
                 filter_expr = "|".join(f"FullyQualifiedName~{f}" for f in filters)
                 cmd.extend(["--filter", filter_expr])
 
-        cmd_result = await _run_command(cmd, cwd=project_path, timeout=timeout)
-        output_parts = [f"$ {' '.join(cmd)}\nexit_code={cmd_result.returncode}"]
-        if cmd_result.stdout:
-            output_parts.append(cmd_result.stdout)
-        if cmd_result.stderr:
-            output_parts.append(cmd_result.stderr)
+        result = await _run_command(cmd, cwd=project_path, timeout=timeout)
+        output_parts = [f"$ {' '.join(cmd)}\nexit_code={result.returncode}"]
+        if result.stdout:
+            output_parts.append(result.stdout)
+        if result.stderr:
+            output_parts.append(result.stderr)
         raw_output = "\n".join(output_parts)
 
-        if cmd_result.timed_out or cmd_result.not_found:
+        if result.timed_out or result.not_found:
             return RunResult(raw_output=raw_output, success=False)
 
         if not trx_path.is_file():
             return RunResult(raw_output=raw_output, success=False)
 
-        result = _parse_trx(trx_path, raw_output)
-
-        # Collect coverage if requested
-        if collect_coverage:
-            try:
-                coverage_adapter = CoverletAdapter()
-                coverage_report = await coverage_adapter.run_coverage(
-                    project_path, test_files=test_files, timeout=timeout
-                )
-                result.coverage = coverage_report
-                logger.info(
-                    "Coverage collected: %.1f%% line coverage",
-                    coverage_report.overall_line_coverage,
-                )
-            except Exception as e:
-                logger.warning("Failed to collect coverage: %s", e)
-
-        return result
+        return _parse_trx(trx_path, raw_output)
 
     def validate_test(self, test_code: str) -> ValidationResult:
         """Parse test_code as C# with tree-sitter and report syntax errors."""

@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from nit.agents.analyzers.security import VulnerabilityType
+from nit.agents.analyzers.security_types import VulnerabilityType
 
 if TYPE_CHECKING:
     from nit.agents.analyzers.code import CodeMap
@@ -272,35 +272,9 @@ def register_patterns(patterns: LanguageSecurityPatterns) -> None:
 
 
 def get_patterns_for_language(language: str) -> LanguageSecurityPatterns | None:
-    """Get the pattern module for a language, loading it lazily."""
-    if not _LANGUAGE_PATTERNS:
-        _load_all_patterns()
+    """Get the pattern module for a language.
+
+    Patterns are registered eagerly when the ``security_patterns`` package
+    is first imported (see ``__init__.py``).
+    """
     return _LANGUAGE_PATTERNS.get(language)
-
-
-def _load_all_patterns() -> None:
-    """Instantiate and register all language pattern modules."""
-    from nit.agents.analyzers.security_patterns.c_cpp import CCppSecurityPatterns
-    from nit.agents.analyzers.security_patterns.csharp import CSharpSecurityPatterns
-    from nit.agents.analyzers.security_patterns.go import GoSecurityPatterns
-    from nit.agents.analyzers.security_patterns.java import JavaSecurityPatterns
-    from nit.agents.analyzers.security_patterns.javascript import (
-        JavaScriptSecurityPatterns,
-    )
-    from nit.agents.analyzers.security_patterns.python import PythonSecurityPatterns
-    from nit.agents.analyzers.security_patterns.rust import RustSecurityPatterns
-
-    for patterns_cls in (
-        PythonSecurityPatterns,
-        JavaScriptSecurityPatterns,
-        JavaSecurityPatterns,
-        GoSecurityPatterns,
-        RustSecurityPatterns,
-        CCppSecurityPatterns,
-        CSharpSecurityPatterns,
-    ):
-        instance = patterns_cls()
-        register_patterns(instance)
-        # C++ shares patterns with C
-        if isinstance(instance, CCppSecurityPatterns):
-            _LANGUAGE_PATTERNS["cpp"] = instance

@@ -350,13 +350,14 @@ class TestConfig:
         assert "llm" in data
         assert data["llm"]["provider"] == "openai"
 
-    def test_config_show_fails_on_invalid_config(self, tmp_path: Path) -> None:
+    def test_config_show_gracefully_handles_invalid_yaml(self, tmp_path: Path) -> None:
         (tmp_path / ".nit.yml").write_text("invalid: [[[yaml", encoding="utf-8")
 
         runner = CliRunner()
         result = runner.invoke(cli, ["config", "show", "--path", str(tmp_path)])
 
-        assert result.exit_code != 0
+        # Invalid YAML is now handled gracefully: logs warning and uses defaults
+        assert result.exit_code == 0
 
     def test_config_validate_valid_config(self, tmp_path: Path) -> None:
         (tmp_path / ".nit.yml").write_text(

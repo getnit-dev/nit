@@ -62,8 +62,8 @@ def test_report_cli_usage_event_posts_payload(monkeypatch: pytest.MonkeyPatch) -
     assert "events" in payload
 
     event = payload["events"][0]
-    assert event["userId"] == "user-123"
-    assert event["projectId"] == "project-456"
+    assert "userId" not in event
+    assert "projectId" not in event
     assert event["provider"] == "anthropic"
     assert event["model"] == "claude-sonnet-4-5"
     assert event["promptTokens"] == 120
@@ -113,8 +113,8 @@ def test_callback_extracts_litellm_usage(monkeypatch: pytest.MonkeyPatch) -> Non
     assert isinstance(payload, dict)
     event = payload["events"][0]
 
-    assert event["userId"] == "user-callback"
-    assert event["projectId"] == "project-callback"
+    assert "userId" not in event
+    assert "projectId" not in event
     assert event["provider"] == "anthropic"
     assert event["promptTokens"] == 45
     assert event["completionTokens"] == 30
@@ -362,7 +362,7 @@ class TestUsageReporterConfig:
         config = usage_callback.UsageReporterConfig(
             platform_url="https://example.com",
             ingest_token=_TEST_INGEST_TOKEN,
-            user_id="u",
+            user_id="",
             project_id=None,
             key_hash=None,
             batch_size=20,
@@ -376,7 +376,7 @@ class TestUsageReporterConfig:
         config = usage_callback.UsageReporterConfig(
             platform_url="",
             ingest_token=_TEST_INGEST_TOKEN,
-            user_id="u",
+            user_id="",
             project_id=None,
             key_hash=None,
             batch_size=20,
@@ -433,7 +433,7 @@ class TestBatchedUsageReporter:
         config = usage_callback.UsageReporterConfig(
             platform_url="",
             ingest_token="",
-            user_id="u",
+            user_id="",
             project_id=None,
             key_hash=None,
             batch_size=1,
@@ -449,7 +449,7 @@ class TestBatchedUsageReporter:
         config = usage_callback.UsageReporterConfig(
             platform_url="",
             ingest_token="",
-            user_id="u",
+            user_id="",
             project_id=None,
             key_hash=None,
             batch_size=1,
@@ -461,12 +461,12 @@ class TestBatchedUsageReporter:
         # Should not raise
         reporter.flush()
 
-    def test_build_metadata_includes_user_and_project(self) -> None:
+    def test_build_metadata_includes_key_hash(self) -> None:
         config = usage_callback.UsageReporterConfig(
             platform_url="https://example.com",
             ingest_token=_TEST_INGEST_TOKEN,
-            user_id="u1",
-            project_id="p1",
+            user_id="",
+            project_id=None,
             key_hash="kh",
             batch_size=20,
             flush_interval_seconds=5.0,
@@ -475,10 +475,10 @@ class TestBatchedUsageReporter:
         )
         reporter = usage_callback.BatchedUsageReporter(config)
         meta = reporter.build_metadata(usage_callback.MetadataParams(source="byok", mode="builtin"))
-        assert meta["nit_user_id"] == "u1"
-        assert meta["nit_project_id"] == "p1"
         assert meta["nit_key_hash"] == "kh"
         assert meta["nit_usage_source"] == "byok"
+        assert "nit_user_id" not in meta
+        assert "nit_project_id" not in meta
 
     def test_build_metadata_with_overrides(self) -> None:
         config = usage_callback.UsageReporterConfig(
@@ -561,7 +561,7 @@ class TestBatchedUsageReporterFlushAndPost:
         return usage_callback.UsageReporterConfig(
             platform_url="https://example.com" if enabled else "",
             ingest_token=_token if enabled else "",
-            user_id="u",
+            user_id="",
             project_id=None,
             key_hash=None,
             batch_size=batch_size,
@@ -659,7 +659,7 @@ class TestBatchedUsageReporterFlushAndPost:
         reporter._config = usage_callback.UsageReporterConfig(
             platform_url="https://example.com",
             ingest_token=_token,
-            user_id="u",
+            user_id="",
             project_id=None,
             key_hash=None,
             batch_size=100,

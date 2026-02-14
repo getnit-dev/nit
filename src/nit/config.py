@@ -210,13 +210,13 @@ class PlatformConfig:
     """Platform virtual API key for proxy/reporting."""
 
     mode: str = ""
-    """Platform mode: platform | byok | disabled."""
+    """Platform mode: byok | disabled."""
 
     user_id: str = ""
-    """Optional user ID for usage metadata."""
+    """User identifier for usage tracking and platform authentication."""
 
     project_id: str = ""
-    """Optional project ID for usage metadata/report uploads."""
+    """Optional project ID for memory sync query parameter."""
 
     key_hash: str = ""
     """Optional key hash override for usage metadata."""
@@ -345,6 +345,23 @@ class SecurityConfig:
 
 
 @dataclass
+class PromptsConfig:
+    """Prompt tracking and replay configuration."""
+
+    tracking: bool = True
+    """Enable prompt recording (default: True)."""
+
+    sync_to_platform: bool = False
+    """Sync prompt records to platform (default: False, contains source code)."""
+
+    max_history_days: int = 90
+    """Auto-prune prompt records older than this many days."""
+
+    redact_source: bool = False
+    """Hash message content instead of storing full text (for privacy)."""
+
+
+@dataclass
 class PipelineConfig:
     """Pipeline execution configuration."""
 
@@ -437,6 +454,9 @@ class NitConfig:
 
     security: SecurityConfig = field(default_factory=SecurityConfig)
     """Security analysis configuration."""
+
+    prompts: PromptsConfig = field(default_factory=PromptsConfig)
+    """Prompt tracking and replay configuration."""
 
     packages: dict[str, dict[str, Any]] = field(default_factory=dict)
     """Per-package configuration overrides."""
@@ -612,6 +632,80 @@ def _parse_security_config(raw: dict[str, Any]) -> SecurityConfig:
     )
 
 
+def _load_raw_config(root_path: Path) -> dict[str, Any]:
+    """Read and parse ``.nit.yml``, returning a raw dict (empty on failure)."""
+    nit_yml = root_path / ".nit.yml"
+    if not nit_yml.is_file():
+        return {}
+    try:
+        text = nit_yml.read_text(encoding="utf-8")
+        parsed = yaml.safe_load(text)
+        if isinstance(parsed, dict):
+            return _resolve_dict(parsed)
+    except yaml.YAMLError as exc:
+        logger.error("Failed to parse .nit.yml: %s", exc)
+        logger.warning("Using default configuration.")
+    return {}
+
+
+def _parse_prompts_config(raw: dict[str, Any]) -> PromptsConfig:
+    """Parse prompt tracking configuration from raw YAML."""
+    prompts_raw = raw.get("prompts", {})
+    if not isinstance(prompts_raw, dict):
+        prompts_raw = {}
+
+    return PromptsConfig(
+        tracking=bool(prompts_raw.get("tracking", True)),
+        sync_to_platform=bool(prompts_raw.get("sync_to_platform", False)),
+        max_history_days=int(prompts_raw.get("max_history_days", 90)),
+        redact_source=bool(prompts_raw.get("redact_source", False)),
+    )
+
+
+def _parse_llm_config(raw: dict[str, Any]) -> LLMConfig:
+    """Parse the ``llm`` section of ``.nit.yml``."""
+    llm_raw = raw.get("llm", {})
+    if not isinstance(llm_raw, dict):
+        llm_raw = {}
+
+    return LLMConfig(
+        provider=str(llm_raw.get("provider", os.environ.get("NIT_LLM_PROVIDER", "openai"))),
+        model=str(llm_raw.get("model", os.environ.get("NIT_LLM_MODEL", ""))),
+        api_key=str(llm_raw.get("api_key", os.environ.get("NIT_LLM_API_KEY", ""))),
+        base_url=str(llm_raw.get("base_url", os.environ.get("NIT_LLM_BASE_URL", ""))),
+        mode=str(llm_raw.get("mode", "builtin")),
+        temperature=float(llm_raw.get("temperature", 0.2)),
+        max_tokens=int(llm_raw.get("max_tokens", 4096)),
+        requests_per_minute=int(llm_raw.get("requests_per_minute", 60)),
+        max_retries=int(llm_raw.get("max_retries", 3)),
+        cli_command=str(llm_raw.get("cli_command", "")),
+        cli_timeout=int(llm_raw.get("cli_timeout", 300)),
+        cli_extra_args=(
+            [str(arg) for arg in llm_raw.get("cli_extra_args", [])]
+            if isinstance(llm_raw.get("cli_extra_args", []), list)
+            else []
+        ),
+        token_budget=int(llm_raw.get("token_budget", 0)),
+    )
+
+
+def _parse_platform_config(raw: dict[str, Any]) -> PlatformConfig:
+    """Parse the ``platform`` section of ``.nit.yml``."""
+    platform_raw = raw.get("platform", {})
+    if not isinstance(platform_raw, dict):
+        platform_raw = {}
+
+    return PlatformConfig(
+        url=str(platform_raw.get("url", os.environ.get("NIT_PLATFORM_URL", ""))),
+        api_key=str(platform_raw.get("api_key", os.environ.get("NIT_PLATFORM_API_KEY", ""))),
+        mode=str(platform_raw.get("mode", os.environ.get("NIT_PLATFORM_MODE", ""))),
+        project_id=str(
+            platform_raw.get("project_id", os.environ.get("NIT_PLATFORM_PROJECT_ID", ""))
+        ),
+        key_hash=str(platform_raw.get("key_hash", os.environ.get("NIT_PLATFORM_KEY_HASH", ""))),
+    )
+
+
 def load_config(root: str | Path) -> NitConfig:
     """Load and parse the complete ``.nit.yml`` configuration.
 
@@ -619,14 +713,7 @@ def load_config(root: str | Path) -> NitConfig:
     the YAML file is missing or incomplete.
     """
     root_path = Path(root).resolve()
-    nit_yml = root_path / ".nit.yml"
-
-    raw: dict[str, Any] = {}
-    if nit_yml.is_file():
-        text = nit_yml.read_text(encoding="utf-8")
-        parsed = yaml.safe_load(text)
-        if isinstance(parsed, dict):
-            raw = _resolve_dict(parsed)
+    raw = _load_raw_config(root_path)
 
     # Parse project section
     project_raw = raw.get("project", {})
@@ -650,30 +737,7 @@ def load_config(root: str | Path) -> NitConfig:
         integration_framework=str(testing_raw.get("integration_framework", "")),
     )
 
-    # Parse LLM section
-    llm_raw = raw.get("llm", {})
-    if not isinstance(llm_raw, dict):
-        llm_raw = {}
-
-    llm = LLMConfig(
-        provider=str(llm_raw.get("provider", os.environ.get("NIT_LLM_PROVIDER", "openai"))),
-        model=str(llm_raw.get("model", os.environ.get("NIT_LLM_MODEL", ""))),
-        api_key=str(llm_raw.get("api_key", os.environ.get("NIT_LLM_API_KEY", ""))),
-        base_url=str(llm_raw.get("base_url", os.environ.get("NIT_LLM_BASE_URL", ""))),
-        mode=str(llm_raw.get("mode", "builtin")),
-        temperature=float(llm_raw.get("temperature", 0.2)),
-        max_tokens=int(llm_raw.get("max_tokens", 4096)),
-        requests_per_minute=int(llm_raw.get("requests_per_minute", 60)),
-        max_retries=int(llm_raw.get("max_retries", 3)),
-        cli_command=str(llm_raw.get("cli_command", "")),
-        cli_timeout=int(llm_raw.get("cli_timeout", 300)),
-        cli_extra_args=(
-            [str(arg) for arg in llm_raw.get("cli_extra_args", [])]
-            if isinstance(llm_raw.get("cli_extra_args", []), list)
-            else []
-        ),
-        token_budget=int(llm_raw.get("token_budget", 0)),
-    )
+    llm = _parse_llm_config(raw)
 
     # Parse git section
     git_raw = raw.get("git", {})
@@ -704,21 +768,7 @@ def load_config(root: str | Path) -> NitConfig:
         serve_port=int(report_raw.get("serve_port", 8080)),
     )
 
-    # Parse platform section
-    platform_raw = raw.get("platform", {})
-    if not isinstance(platform_raw, dict):
-        platform_raw = {}
-
-    platform = PlatformConfig(
-        url=str(platform_raw.get("url", os.environ.get("NIT_PLATFORM_URL", ""))),
-        api_key=str(platform_raw.get("api_key", os.environ.get("NIT_PLATFORM_API_KEY", ""))),
-        mode=str(platform_raw.get("mode", os.environ.get("NIT_PLATFORM_MODE", ""))),
-        user_id=str(platform_raw.get("user_id", os.environ.get("NIT_PLATFORM_USER_ID", ""))),
-        project_id=str(
-            platform_raw.get("project_id", os.environ.get("NIT_PLATFORM_PROJECT_ID", ""))
-        ),
-        key_hash=str(platform_raw.get("key_hash", os.environ.get("NIT_PLATFORM_KEY_HASH", ""))),
-    )
+    platform = _parse_platform_config(raw)
 
     # Parse workspace section
     workspace_raw = raw.get("workspace", {})
@@ -748,6 +798,8 @@ def load_config(root: str | Path) -> NitConfig:
 
     security = _parse_security_config(raw)
 
+    prompts = _parse_prompts_config(raw)
+
     packages_raw = raw.get("packages", {})
     if not isinstance(packages_raw, dict):
         packages_raw = {}
@@ -767,6 +819,7 @@ def load_config(root: str | Path) -> NitConfig:
         execution=execution,
         sentry=sentry,
         security=security,
+        prompts=prompts,
         packages=packages_raw,
         raw=raw,
     )

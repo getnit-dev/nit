@@ -5,13 +5,13 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from nit.agents.analyzers.security import VulnerabilityType
 from nit.agents.analyzers.security_patterns.base import (
     DangerousSink,
     LanguageSecurityPatterns,
     PatternMatch,
     detect_hardcoded_secrets,
 )
+from nit.agents.analyzers.security_types import VulnerabilityType
 
 if TYPE_CHECKING:
     from nit.agents.analyzers.code import CodeMap
@@ -74,9 +74,7 @@ _GO_SINKS: list[DangerousSink] = [
             "template.HTML() marks content as safe HTML, bypassing Go's "
             "template escaping. User data passed here enables XSS."
         ),
-        remediation=(
-            "Use html/template auto-escaping; do not pass user data to template.HTML()."
-        ),
+        remediation=("Use html/template auto-escaping; do not pass user data to template.HTML()."),
         confidence=0.70,
         safe_guards=[],
     ),

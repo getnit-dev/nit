@@ -325,11 +325,11 @@ class DashboardReporter:
         flaky_count = len(health["flaky_tests"])
 
         if pass_rate >= _PASS_RATE_THRESHOLD_SUCCESS:
-            pass_rate_class = "success"
+            rate_css_class = "success"
         elif pass_rate >= _PASS_RATE_THRESHOLD_WARNING:
-            pass_rate_class = "warning"
+            rate_css_class = "warning"
         else:
-            pass_rate_class = "error"
+            rate_css_class = "error"
 
         flaky_class = "error" if flaky_count > 0 else "success"
 
@@ -340,7 +340,7 @@ class DashboardReporter:
         </div>
         <div class="metric">
             <span class="metric-label">Pass Rate</span>
-            <span class="metric-value {pass_rate_class}">{pass_rate:.1f}%</span>
+            <span class="metric-value {rate_css_class}">{pass_rate:.1f}%</span>
         </div>
         <div class="metric">
             <span class="metric-label">Flaky Tests</span>

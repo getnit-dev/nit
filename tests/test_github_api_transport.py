@@ -537,7 +537,7 @@ class TestHTTPErrors:
             status=404,
         )
 
-        with pytest.raises(GitHubAPIError, match="GET request failed"):
+        with pytest.raises(GitHubAPIError, match="GitHub API error 404"):
             api.find_comment_by_marker(pr_info, "<!-- nit -->")
 
     @responses.activate
@@ -553,7 +553,7 @@ class TestHTTPErrors:
             status=422,
         )
 
-        with pytest.raises(GitHubAPIError, match="POST request failed"):
+        with pytest.raises(GitHubAPIError, match="GitHub API error 422"):
             api.create_comment(pr_info, "")
 
     @responses.activate
@@ -566,7 +566,7 @@ class TestHTTPErrors:
             status=403,
         )
 
-        with pytest.raises(GitHubAPIError, match="PATCH request failed"):
+        with pytest.raises(GitHubAPIError, match="GitHub API error 403"):
             api.update_comment(pr_info, 1, "Updated")
 
     @responses.activate
@@ -579,7 +579,7 @@ class TestHTTPErrors:
             status=500,
         )
 
-        with pytest.raises(GitHubAPIError, match="POST request failed"):
+        with pytest.raises(GitHubAPIError, match="GitHub API error 500"):
             api.create_comment(pr_info, "test")
 
     @responses.activate
@@ -724,7 +724,7 @@ class TestEdgeCases:
             },
         )
 
-        with pytest.raises(GitHubAPIError, match="GET request failed"):
+        with pytest.raises(GitHubAPIError, match="GitHub API error 403"):
             api.find_comment_by_marker(pr_info, "<!-- nit -->")
 
     @responses.activate

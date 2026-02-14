@@ -13,10 +13,17 @@ import contextlib
 import logging
 import re
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from nit.agents.analyzers.security_patterns.base import get_patterns_for_language
+from nit.agents.analyzers.security_types import SecuritySeverity, VulnerabilityType
 from nit.agents.base import BaseAgent, TaskInput, TaskOutput, TaskStatus
+from nit.llm.engine import GenerationRequest
+from nit.llm.prompts.security_analysis import (
+    SecurityAnalysisContext,
+    SecurityAnalysisPrompt,
+)
+from nit.parsing.treesitter import EXTENSION_TO_LANGUAGE
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -24,6 +31,13 @@ if TYPE_CHECKING:
     from nit.llm.engine import LLMEngine
 
 logger = logging.getLogger(__name__)
+
+# Re-export enums that were extracted to security_types to break a circular
+# import between this module and security_patterns.base.
+__all__ = [
+    "SecuritySeverity",
+    "VulnerabilityType",
+]
 
 # ── Confidence thresholds ─────────────────────────────────────────
 
@@ -35,32 +49,6 @@ DEFAULT_CONFIDENCE_THRESHOLD = 0.7
 
 MAX_LLM_VALIDATIONS = 20
 """Cap on LLM calls per security scan for cost control."""
-
-
-# ── Enums ─────────────────────────────────────────────────────────
-
-
-class VulnerabilityType(Enum):
-    """Types of security vulnerabilities detected."""
-
-    SQL_INJECTION = "sql_injection"
-    COMMAND_INJECTION = "command_injection"
-    PATH_TRAVERSAL = "path_traversal"
-    XSS = "xss"
-    CREDENTIAL_LEAK = "credential_leak"
-    WEAK_CRYPTO = "weak_crypto"
-    INSECURE_DESERIALIZATION = "insecure_deserialization"
-    SSRF = "ssrf"
-
-
-class SecuritySeverity(Enum):
-    """Severity levels for security findings."""
-
-    CRITICAL = "critical"
-    HIGH = "high"
-    MEDIUM = "medium"
-    LOW = "low"
-    INFO = "info"
 
 
 # ── CWE + severity mappings ──────────────────────────────────────
@@ -234,8 +222,6 @@ class SecurityAnalyzer(BaseAgent):
 
     async def analyze(self, task: SecurityAnalysisTask) -> SecurityReport:
         """Scan all code maps and produce a security report."""
-        from nit.agents.analyzers.security_patterns.base import get_patterns_for_language
-
         all_findings: list[SecurityFinding] = []
 
         for file_path, code_map in task.code_maps.items():
@@ -298,12 +284,6 @@ class SecurityAnalyzer(BaseAgent):
 
     async def _validate_with_llm(self, findings: list[SecurityFinding]) -> list[SecurityFinding]:
         """Use LLM to validate medium-confidence findings."""
-        from nit.llm.engine import GenerationRequest
-        from nit.llm.prompts.security_analysis import (
-            SecurityAnalysisContext,
-            SecurityAnalysisPrompt,
-        )
-
         validated: list[SecurityFinding] = []
         llm_calls = 0
         prompt_template = SecurityAnalysisPrompt()
@@ -370,8 +350,6 @@ def _deduplicate(findings: list[SecurityFinding]) -> list[SecurityFinding]:
 
 def _language_from_path(file_path: str) -> str:
     """Infer language from file extension."""
-    from nit.parsing.treesitter import EXTENSION_TO_LANGUAGE
-
     ext = "." + file_path.rsplit(".", 1)[-1] if "." in file_path else ""
     return EXTENSION_TO_LANGUAGE.get(ext, "unknown")
 

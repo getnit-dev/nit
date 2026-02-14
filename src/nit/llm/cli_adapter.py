@@ -611,15 +611,15 @@ class CustomCommandAdapter(CLIToolAdapter):
         user_msgs = [m for m in request.messages if m.role == "user"]
         prompt = user_msgs[-1].content if user_msgs else ""
 
-        # Build command with substitutions
-        cmd_template = self._config.command
-        cmd_str = cmd_template.format(
-            context_file=str(context_file),
-            source_file=str(context_file),
-            output_file=str(output_file),
-            prompt=prompt,
-            model=model,
-        )
+        # Build command with substitutions — use str.replace() instead of
+        # .format() to prevent injection via user-controlled values like
+        # {prompt} that could contain format specifiers ({0}, {__class__}).
+        cmd_str = self._config.command
+        cmd_str = cmd_str.replace("{context_file}", str(context_file))
+        cmd_str = cmd_str.replace("{source_file}", str(context_file))
+        cmd_str = cmd_str.replace("{output_file}", str(output_file))
+        cmd_str = cmd_str.replace("{prompt}", prompt)
+        cmd_str = cmd_str.replace("{model}", model)
 
         # Parse into args (shlex handles quoted arguments correctly)
         cmd = shlex.split(cmd_str)

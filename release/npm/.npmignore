@@ -1,0 +1,3 @@
+# Ignore downloaded binaries (they are fetched at install time)
+bin/nit-binary
+bin/nit-binary.exe

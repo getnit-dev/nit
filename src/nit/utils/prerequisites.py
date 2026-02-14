@@ -141,33 +141,29 @@ def detect_package_manager(project_path: Path) -> PackageManager | None:
     Checks for lock files and configuration files to determine the
     package manager in use.
     """
-    # Node.js package managers
-    if (project_path / "bun.lockb").exists():
-        return PackageManager.BUN
-    if (project_path / "pnpm-lock.yaml").exists():
-        return PackageManager.PNPM
-    if (project_path / "yarn.lock").exists():
-        return PackageManager.YARN
-    if (project_path / "package-lock.json").exists() or (project_path / "package.json").exists():
-        return PackageManager.NPM
+    # Ordered list of (marker_files, package_manager) — first match wins.
+    # If ANY file in the marker list exists, that package manager is returned.
+    single_file_checks: list[tuple[list[str], PackageManager]] = [
+        # Node.js package managers
+        (["bun.lockb"], PackageManager.BUN),
+        (["pnpm-lock.yaml"], PackageManager.PNPM),
+        (["yarn.lock"], PackageManager.YARN),
+        (["package-lock.json", "package.json"], PackageManager.NPM),
+        # Python package managers
+        (["uv.lock"], PackageManager.UV),
+        (["poetry.lock"], PackageManager.POETRY),
+        (["requirements.txt", "pyproject.toml"], PackageManager.PIP),
+        # Rust
+        (["Cargo.toml"], PackageManager.CARGO),
+        # Ruby
+        (["Gemfile"], PackageManager.BUNDLE),
+    ]
 
-    # Python package managers
-    if (project_path / "uv.lock").exists():
-        return PackageManager.UV
-    if (project_path / "poetry.lock").exists():
-        return PackageManager.POETRY
-    if (project_path / "requirements.txt").exists() or (project_path / "pyproject.toml").exists():
-        return PackageManager.PIP
+    for markers, manager in single_file_checks:
+        if any((project_path / m).exists() for m in markers):
+            return manager
 
-    # Rust
-    if (project_path / "Cargo.toml").exists():
-        return PackageManager.CARGO
-
-    # Ruby
-    if (project_path / "Gemfile").exists():
-        return PackageManager.BUNDLE
-
-    # .NET
+    # .NET (uses glob patterns instead of exact filenames)
     if list(project_path.glob("*.csproj")) or list(project_path.glob("*.fsproj")):
         return PackageManager.DOTNET
 
@@ -316,33 +312,29 @@ def get_install_command(
     """
     pkg_list = " ".join(packages)
 
-    if package_manager == PackageManager.NPM:
-        flag = "--save-dev" if dev else "--save"
-        return f"npm install {flag} {pkg_list}"
-    if package_manager == PackageManager.YARN:
-        flag = "--dev" if dev else ""
-        return f"yarn add {flag} {pkg_list}".strip()
-    if package_manager == PackageManager.PNPM:
-        flag = "--save-dev" if dev else ""
-        return f"pnpm add {flag} {pkg_list}".strip()
-    if package_manager == PackageManager.BUN:
-        flag = "--dev" if dev else ""
-        return f"bun add {flag} {pkg_list}".strip()
-    if package_manager == PackageManager.PIP:
-        return f"pip install {pkg_list}"
-    if package_manager == PackageManager.POETRY:
-        flag = "--group dev" if dev else ""
-        return f"poetry add {flag} {pkg_list}".strip()
-    if package_manager == PackageManager.UV:
-        flag = "--dev" if dev else ""
-        return f"uv add {flag} {pkg_list}".strip()
-    if package_manager == PackageManager.CARGO:
-        flag = "--dev" if dev else ""
-        return f"cargo add {flag} {pkg_list}".strip()
-    if package_manager == PackageManager.BUNDLE:
-        return f"bundle add {pkg_list}"
+    # Dispatch table: PackageManager -> (command_prefix, dev_flag, non_dev_flag)
+    # Each entry produces: f"{cmd} {flag} {pkg_list}".strip()
+    flag_table: dict[PackageManager, tuple[str, str, str]] = {
+        PackageManager.NPM: ("npm install", "--save-dev", "--save"),
+        PackageManager.YARN: ("yarn add", "--dev", ""),
+        PackageManager.PNPM: ("pnpm add", "--save-dev", ""),
+        PackageManager.BUN: ("bun add", "--dev", ""),
+        PackageManager.PIP: ("pip install", "", ""),
+        PackageManager.POETRY: ("poetry add", "--group dev", ""),
+        PackageManager.UV: ("uv add", "--dev", ""),
+        PackageManager.CARGO: ("cargo add", "--dev", ""),
+        PackageManager.BUNDLE: ("bundle add", "", ""),
+    }
+
+    entry = flag_table.get(package_manager)
+    if entry is not None:
+        cmd, dev_flag, non_dev_flag = entry
+        flag = dev_flag if dev else non_dev_flag
+        parts = [cmd, flag, pkg_list] if flag else [cmd, pkg_list]
+        return " ".join(parts)
+
+    # .NET: packages are installed per-project
     if package_manager == PackageManager.DOTNET:
-        # For .NET, packages are installed per-project
         return f"dotnet add package {packages[0]}" if packages else ""
 
     return ""

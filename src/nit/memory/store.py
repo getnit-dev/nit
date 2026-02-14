@@ -18,10 +18,10 @@ logger = logging.getLogger(__name__)
 # Default memory directory relative to project root
 DEFAULT_MEMORY_DIR = ".nit/memory"
 
-T = TypeVar("T")
+_T = TypeVar("_T")
 
 
-class MemoryStore(Generic[T]):
+class MemoryStore(Generic[_T]):
     """Generic JSON-based storage for memory data.
 
     Stores and retrieves JSON-serializable data in `.nit/memory/` directory.

@@ -18,9 +18,11 @@ import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from nit.memory.analytics_collector import get_analytics_collector
+from nit.models.analytics import BugSnapshot
 from nit.utils.git import (
     GitHubAPI,
     GitHubAPIError,
@@ -387,13 +389,16 @@ class GitHubPRReporter:
                 try:
                     collector = get_analytics_collector(self._repo_path)
                     collector.record_bug(
-                        bug_type=bug_report.bug_type.value,
-                        severity=bug_report.severity.value,
-                        status="fixed",
-                        file_path=file_path,
-                        line_number=bug_report.location.line_number,
-                        title=bug_report.title,
-                        pr_url=result.pr_url,
+                        BugSnapshot(
+                            timestamp=datetime.now(UTC).isoformat(),
+                            bug_type=bug_report.bug_type.value,
+                            severity=bug_report.severity.value,
+                            status="fixed",
+                            file_path=file_path,
+                            line_number=bug_report.location.line_number,
+                            title=bug_report.title,
+                            pr_url=result.pr_url,
+                        ),
                     )
                     if result.pr_url:
                         collector.record_pr_created(

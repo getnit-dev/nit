@@ -10,6 +10,8 @@ from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
+from nit.agents.analyzers.security import SecurityReport, SecuritySeverity
+
 if TYPE_CHECKING:
     from rich.status import Status
 
@@ -928,8 +930,6 @@ class CLIReporter:
             security_report: A SecurityReport instance (typed as object to
                 avoid importing the module at top level).
         """
-        from nit.agents.analyzers.security import SecurityReport, SecuritySeverity
-
         if not isinstance(security_report, SecurityReport):
             return
         if not security_report.findings:

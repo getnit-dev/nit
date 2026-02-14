@@ -34,6 +34,7 @@ EVENT_FILES = {
     "drift": "drift.jsonl",
     "pr": "prs.jsonl",
     "issue": "issues.jsonl",
+    "prompts": "prompts.jsonl",
 }
 
 

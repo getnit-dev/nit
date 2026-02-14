@@ -100,6 +100,15 @@ class LLMEngine(ABC):
     def model_name(self) -> str:
         """Return the default model identifier for this engine."""
 
+    def count_tokens(self, text: str) -> int:
+        """Estimate the token count for *text*.
+
+        The default implementation uses a rough heuristic (1 token per
+        4 characters).  Subclasses that have access to a real tokeniser
+        (e.g. via LiteLLM) should override this for better accuracy.
+        """
+        return max(1, len(text) // 4)
+
 
 class LLMError(Exception):
     """Base exception for LLM-related errors."""

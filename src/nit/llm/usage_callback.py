@@ -23,6 +23,8 @@ import requests
 from litellm.integrations.custom_logger import CustomLogger
 
 from nit.memory.analytics_collector import get_analytics_collector
+from nit.models.analytics import LLMUsage
+from nit.telemetry.sentry_integration import record_metric_count, record_metric_distribution
 from nit.utils.platform_client import build_usage_url, get_platform_api_key
 
 if TYPE_CHECKING:
@@ -57,7 +59,6 @@ class UsageReporterConfig:
 
     @property
     def enabled(self) -> bool:
-        # Note: user_id and project_id are extracted from the token on the backend
         return bool(self.platform_url and self.ingest_token)
 
     @classmethod
@@ -66,9 +67,9 @@ class UsageReporterConfig:
         ingest_token = (
             os.environ.get("NIT_PLATFORM_INGEST_TOKEN", "").strip() or get_platform_api_key()
         )
-        user_id = os.environ.get("NIT_PLATFORM_USER_ID", "").strip()
-        project_id = os.environ.get("NIT_PLATFORM_PROJECT_ID", "").strip() or None
         key_hash = os.environ.get("NIT_PLATFORM_KEY_HASH", "").strip() or None
+        user_id = os.environ.get("NIT_USER_ID", "").strip()
+        project_id = os.environ.get("NIT_PROJECT_ID", "").strip() or None
 
         batch_size = _parse_int_env("NIT_USAGE_BATCH_SIZE", _DEFAULT_BATCH_SIZE, minimum=1)
         flush_interval = _parse_float_env(
@@ -319,7 +320,6 @@ class BatchedUsageReporter:
             "nit_usage_emit": params.emit_usage,
         }
 
-        # Include user_id and project_id if available from config
         if self._config.user_id:
             metadata["nit_user_id"] = self._config.user_id
 
@@ -490,17 +490,10 @@ def report_cli_usage_event(usage: CLIUsageEvent) -> None:
         "promptTokens": max(usage.prompt_tokens, 0),
         "completionTokens": max(usage.completion_tokens, 0),
         "costUsd": max(usage.cost_usd, 0.0),
-        "marginUsd": 0.0,
         "cacheHit": bool(usage.cache_hit),
         "source": _normalize_source(usage.source),
         "timestamp": _safe_iso_timestamp(usage.timestamp),
     }
-
-    if reporter._config.user_id:
-        event["userId"] = reporter._config.user_id
-
-    if reporter._config.project_id:
-        event["projectId"] = reporter._config.project_id
 
     if usage.duration_ms is not None and usage.duration_ms >= 0:
         event["durationMs"] = int(usage.duration_ms)
@@ -545,14 +538,18 @@ class NitUsageCallback(CustomLogger):
             if self._project_root:
                 try:
                     collector = get_analytics_collector(self._project_root)
+                    prompt = event.get("promptTokens", 0)
+                    completion = event.get("completionTokens", 0)
                     collector.record_llm_usage(
-                        provider=event.get("provider", "unknown"),
-                        model=event.get("model", "unknown"),
-                        prompt_tokens=event.get("promptTokens", 0),
-                        completion_tokens=event.get("completionTokens", 0),
-                        cost_usd=event.get("costUsd"),
-                        duration_ms=event.get("durationMs"),
-                        cached_tokens=0,  # Could extract from usage if available
+                        LLMUsage(
+                            provider=event.get("provider", "unknown"),
+                            model=event.get("model", "unknown"),
+                            prompt_tokens=prompt,
+                            completion_tokens=completion,
+                            total_tokens=prompt + completion,
+                            cost_usd=event.get("costUsd"),
+                            duration_ms=event.get("durationMs"),
+                        ),
                         metadata={
                             "source": event.get("source"),
                             "session_id": event.get("sessionId"),
@@ -582,16 +579,21 @@ class NitUsageCallback(CustomLogger):
             if self._project_root:
                 try:
                     collector = get_analytics_collector(self._project_root)
-                    await asyncio.to_thread(
-                        collector.record_llm_usage,
+                    prompt = event.get("promptTokens", 0)
+                    completion = event.get("completionTokens", 0)
+                    usage = LLMUsage(
                         provider=event.get("provider", "unknown"),
                         model=event.get("model", "unknown"),
-                        prompt_tokens=event.get("promptTokens", 0),
-                        completion_tokens=event.get("completionTokens", 0),
+                        prompt_tokens=prompt,
+                        completion_tokens=completion,
+                        total_tokens=prompt + completion,
                         cost_usd=event.get("costUsd"),
                         duration_ms=event.get("durationMs"),
-                        cached_tokens=0,
-                        metadata={
+                    )
+                    await asyncio.to_thread(
+                        collector.record_llm_usage,
+                        usage,
+                        {
                             "source": event.get("source"),
                             "session_id": event.get("sessionId"),
                             "cache_hit": event.get("cacheHit", False),
@@ -605,11 +607,6 @@ class NitUsageCallback(CustomLogger):
     @staticmethod
     def _emit_sentry_metrics(event: dict[str, Any]) -> None:
         """Emit Sentry metrics for an LLM usage event. No-op if Sentry is disabled."""
-        from nit.telemetry.sentry_integration import (
-            record_metric_count,
-            record_metric_distribution,
-        )
-
         provider = event.get("provider", "unknown")
         model = event.get("model", "unknown")
 
@@ -710,27 +707,11 @@ class NitUsageCallback(CustomLogger):
             "promptTokens": prompt_tokens,
             "completionTokens": completion_tokens,
             "costUsd": response_cost,
-            "marginUsd": 0.0,
             "cacheHit": cache_hit,
             "source": source,
             "timestamp": end_ts,
             "durationMs": duration_ms,
         }
-
-        # Include userId and projectId if available
-        user_id = (
-            _pick_metadata_value(metadata, "nit_user_id", "user_id")
-            or self._reporter._config.user_id
-        )
-        if user_id:
-            event["userId"] = user_id
-
-        project_id = (
-            _pick_metadata_value(metadata, "nit_project_id", "project_id")
-            or self._reporter._config.project_id
-        )
-        if project_id:
-            event["projectId"] = project_id
 
         session_id = _pick_metadata_value(metadata, "nit_session_id") or self._reporter.session_id
         if session_id:

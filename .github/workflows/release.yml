@@ -7,15 +7,29 @@ on:
 
 permissions:
   contents: write
+  packages: write
+  id-token: write  # Required for trusted publishing (PyPI and npm)
 
 jobs:
-  build-and-publish:
+  # ------------------------------------------------------------------
+  # Job 1: Build platform binaries (5 platforms)
+  # ------------------------------------------------------------------
+  build-binaries:
+    uses: ./.github/workflows/build-binaries.yml
+    with:
+      upload-artifacts: true
+
+  # ------------------------------------------------------------------
+  # Job 2: Build Python package and publish to PyPI
+  # ------------------------------------------------------------------
+  publish-pypi:
     runs-on: ubuntu-latest
+    needs: build-binaries
     environment:
       name: pypi
       url: https://pypi.org/project/getnit/
     permissions:
-      id-token: write  # Required for trusted publishing to PyPI
+      id-token: write  # Trusted publishing (OIDC)
 
     steps:
       - uses: actions/checkout@v4
@@ -41,10 +55,156 @@ jobs:
         with:
           packages-dir: dist/
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+      - name: Upload sdist for Homebrew sha256
+        uses: actions/upload-artifact@v4
         with:
-          files: dist/*
+          name: python-dist
+          path: dist/
+          retention-days: 1
+
+  # ------------------------------------------------------------------
+  # Job 3: Create GitHub Release with all artifacts
+  # ------------------------------------------------------------------
+  create-release:
+    runs-on: ubuntu-latest
+    needs: [build-binaries, publish-pypi]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Collect release assets
+        run: |
+          mkdir -p release-assets
+          cp artifacts/nit-linux-x64.tar.gz/nit-linux-x64.tar.gz release-assets/
+          cp artifacts/nit-linux-arm64.tar.gz/nit-linux-arm64.tar.gz release-assets/
+          cp artifacts/nit-darwin-x64.tar.gz/nit-darwin-x64.tar.gz release-assets/
+          cp artifacts/nit-darwin-arm64.tar.gz/nit-darwin-arm64.tar.gz release-assets/
+          cp artifacts/nit-windows-x64.zip/nit-windows-x64.zip release-assets/
+          cp artifacts/python-dist/*.whl release-assets/ || true
+          cp artifacts/python-dist/*.tar.gz release-assets/ || true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+
+  # ------------------------------------------------------------------
+  # Job 4: Publish npm package (trusted publishing via OIDC provenance)
+  # ------------------------------------------------------------------
+  publish-npm:
+    runs-on: ubuntu-latest
+    needs: create-release
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/getnit
+    permissions:
+      id-token: write  # Trusted publishing (OIDC provenance)
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Update npm package version
+        working-directory: release/npm
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Publish to npm
+        working-directory: release/npm
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # ------------------------------------------------------------------
+  # Job 5: Build and push Docker images
+  # ------------------------------------------------------------------
+  publish-docker:
+    runs-on: ubuntu-latest
+    needs: publish-pypi
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push production image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: |
+            ghcr.io/getnit-dev/nit:latest
+            ghcr.io/getnit-dev/nit:${{ steps.version.outputs.version }}
+
+      - name: Build and push test image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.test
+          push: true
+          tags: |
+            ghcr.io/getnit-dev/nit:test
+            ghcr.io/getnit-dev/nit:${{ steps.version.outputs.version }}-test
+
+  # ------------------------------------------------------------------
+  # Job 6: Update Homebrew tap formula
+  # ------------------------------------------------------------------
+  update-homebrew:
+    runs-on: ubuntu-latest
+    needs: publish-pypi
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Python dist
+        uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+
+      - name: Compute sdist sha256
+        id: sha
+        run: |
+          SHA256=$(sha256sum dist/*.tar.gz | head -1 | awk '{print $1}')
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Update Homebrew tap
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.HOMEBREW_TAP_PAT }}
+          repository: getnit-dev/homebrew-getnit
+          event-type: update-formula
+          client-payload: |
+            {
+              "version": "${{ steps.version.outputs.version }}",
+              "sha256": "${{ steps.sha.outputs.sha256 }}",
+              "url": "https://files.pythonhosted.org/packages/source/g/getnit/getnit-${{ steps.version.outputs.version }}.tar.gz"
+            }

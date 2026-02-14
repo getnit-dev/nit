@@ -108,4 +108,8 @@ nav:
       - Drift Detection: advanced/drift-detection.md
       - Custom Adapters: advanced/custom-adapters.md
       - Environment Variables: advanced/environment-variables.md
-  - Contributing: contributing.md
+  - Features:
+      - Security Analysis: features/security-analysis.md
+  - Contributing:
+      - Guide: contributing.md
+      - Release Process: contributing/release-process.md

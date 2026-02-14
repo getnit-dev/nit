@@ -74,7 +74,7 @@ def test_llm_response_defaults() -> None:
 
 def test_config_defaults() -> None:
     cfg = LLMConfig()
-    assert cfg.provider == "openai"
+    assert cfg.provider == ""
     assert cfg.model == ""
     assert cfg.mode == "builtin"
     assert cfg.temperature == 0.2
@@ -83,12 +83,12 @@ def test_config_defaults() -> None:
 
 
 def test_config_is_configured_builtin() -> None:
-    cfg = LLMConfig(model="gpt-4o", api_key="sk-test")
+    cfg = LLMConfig(provider="openai", model="gpt-4o", api_key="sk-test")
     assert cfg.is_configured
 
 
 def test_config_is_configured_ollama_no_key() -> None:
-    cfg = LLMConfig(mode="ollama", model="codellama")
+    cfg = LLMConfig(provider="ollama", mode="ollama", model="codellama")
     assert cfg.is_configured
 
 
@@ -161,7 +161,7 @@ def test_load_config_missing_llm_section(tmp_path: Path) -> None:
     nit_yml = tmp_path / ".nit.yml"
     nit_yml.write_text("project:\n  root: .\n")
     cfg = load_llm_config(tmp_path)
-    assert cfg.provider == "openai"  # default
+    assert cfg.provider == ""  # default (no provider)
 
 
 def test_load_config_empty_yaml(tmp_path: Path) -> None:
@@ -398,8 +398,8 @@ async def test_builtin_generate_model_override() -> None:
 async def test_builtin_adds_metadata_and_estimated_headers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("NIT_PLATFORM_USER_ID", "user-abc")
-    monkeypatch.setenv("NIT_PLATFORM_PROJECT_ID", "project-xyz")
+    monkeypatch.setenv("NIT_USER_ID", "user-abc")
+    monkeypatch.setenv("NIT_PROJECT_ID", "project-xyz")
 
     engine = BuiltinLLM(
         BuiltinLLMConfig(

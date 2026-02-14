@@ -1,0 +1,20 @@
+name: Trigger Examples Integration Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  trigger:
+    name: Trigger examples CI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch to examples repo
+        uses: peter-evans/repository-dispatch@v4
+        with:
+          token: ${{ secrets.EXAMPLES_PAT }}
+          repository: getnit-dev/examples
+          event-type: nit-integration-test
+          client-payload: '{"ref": "${{ github.ref }}", "sha": "${{ github.sha }}", "event": "${{ github.event_name }}"}'

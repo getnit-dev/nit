@@ -1,0 +1,3 @@
+#!/bin/sh
+# Shell wrapper for the nit binary (downloaded by postinstall.js)
+exec "$(dirname "$0")/nit-binary" "$@"

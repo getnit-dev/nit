@@ -115,7 +115,9 @@ class TestE2EBuilderInit:
         assert builder._enable_self_healing is True
         assert builder._enable_validation is True
         assert builder._max_retries == 3
-        mock_assembler_cls.assert_called_once_with(root=tmp_path, max_context_tokens=8000)
+        mock_assembler_cls.assert_called_once_with(
+            root=tmp_path, max_context_tokens=8000, token_counter=engine.count_tokens
+        )
         mock_memory_cls.assert_called_once_with(tmp_path)
 
     @patch("nit.agents.builders.e2e.get_registry")
@@ -145,7 +147,9 @@ class TestE2EBuilderInit:
         assert builder._enable_self_healing is False
         assert builder._enable_validation is False
         assert builder._max_retries == 5
-        mock_assembler_cls.assert_called_once_with(root=tmp_path, max_context_tokens=4000)
+        mock_assembler_cls.assert_called_once_with(
+            root=tmp_path, max_context_tokens=4000, token_counter=engine.count_tokens
+        )
 
     @patch("nit.agents.builders.e2e.get_registry")
     @patch("nit.agents.builders.e2e.GlobalMemory")
@@ -160,7 +164,9 @@ class TestE2EBuilderInit:
         engine = _make_llm_engine()
         bad_config: Any = {"max_context_tokens": "not_int"}
         E2EBuilder(engine, tmp_path, config=bad_config)
-        mock_assembler_cls.assert_called_once_with(root=tmp_path, max_context_tokens=8000)
+        mock_assembler_cls.assert_called_once_with(
+            root=tmp_path, max_context_tokens=8000, token_counter=engine.count_tokens
+        )
 
     @patch("nit.agents.builders.e2e.get_registry")
     @patch("nit.agents.builders.e2e.GlobalMemory")

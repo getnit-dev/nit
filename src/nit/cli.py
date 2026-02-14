@@ -28,14 +28,17 @@ from nit.agents.analyzers.diff import DiffAnalysisResult, DiffAnalysisTask, Diff
 from nit.agents.base import TaskStatus
 from nit.agents.builders.docs import DocBuilder, DocBuildTask
 from nit.agents.builders.readme import ReadmeUpdater
+from nit.agents.detectors.dependency import DependencyProfile, detect_dependencies
 from nit.agents.detectors.framework import detect_frameworks, needs_llm_fallback
+from nit.agents.detectors.infra import InfraProfile, detect_infra
 from nit.agents.detectors.signals import FrameworkCategory, FrameworkProfile
 from nit.agents.detectors.stack import detect_languages
 from nit.agents.detectors.workspace import detect_workspace
 from nit.agents.pipelines import PickPipeline, PickPipelineConfig, PickPipelineResult
 from nit.agents.reporters.terminal import reporter
 from nit.config import load_config, validate_config
-from nit.llm.config import load_llm_config
+from nit.llm.config import LLMConfig, load_llm_config
+from nit.llm.engine import LLMAuthError, LLMConnectionError, LLMEngine, LLMError
 from nit.llm.factory import create_engine
 from nit.llm.usage_callback import get_session_usage_stats, get_usage_reporter
 from nit.models.profile import ProjectProfile
@@ -47,6 +50,7 @@ from nit.utils.platform_client import (
     PlatformClientError,
     PlatformRuntimeConfig,
     post_platform_bug,
+    post_platform_drift,
     post_platform_report,
 )
 from nit.utils.readme import find_readme
@@ -141,6 +145,54 @@ def _mask_sensitive_values(config_dict: dict[str, Any]) -> dict[str, Any]:
 
 def _is_llm_runtime_configured(config_obj: Any) -> bool:
     return bool(config_obj.llm.is_configured)
+
+
+def _safe_create_engine(
+    llm_config: LLMConfig,
+    *,
+    project_root: Path | None = None,
+) -> LLMEngine:
+    """Create LLM engine with user-friendly error handling.
+
+    Wraps :func:`create_engine` and converts LLM exceptions into
+    :class:`click.ClickException` with actionable guidance.
+    """
+    try:
+        return create_engine(llm_config, project_root=project_root)
+    except LLMAuthError as exc:
+        raise click.ClickException(
+            f"LLM authentication failed: {exc}\n\n"
+            "Please check:\n"
+            "  1. Your API key is correct and not expired\n"
+            "  2. The key has access to the requested model\n"
+            "  3. Environment variable or .nit.yml value is set properly"
+        ) from exc
+    except LLMConnectionError as exc:
+        raise click.ClickException(
+            f"Could not connect to LLM provider: {exc}\n\n"
+            "Please check:\n"
+            "  1. Your network connection\n"
+            "  2. The provider's base URL is correct\n"
+            "  3. The provider service is available"
+        ) from exc
+    except LLMError as exc:
+        error_msg = str(exc).lower()
+        if any(
+            phrase in error_msg
+            for phrase in [
+                "model not found",
+                "invalid model",
+                "does not exist",
+                "model_not_found",
+            ]
+        ):
+            raise click.ClickException(
+                f"Model not available: {exc}\n\n"
+                f"Provider: {llm_config.provider or '(not set)'}\n"
+                f"Model: {llm_config.model or '(not set)'}\n\n"
+                "Please verify the model name is correct for your provider."
+            ) from exc
+        raise click.ClickException(f"LLM error: {exc}") from exc
 
 
 class _ScanKwargs(TypedDict):
@@ -314,7 +366,6 @@ def _upload_pick_report(config_obj: Any, payload: dict[str, Any]) -> dict[str, A
         url=config_obj.platform.url,
         api_key=config_obj.platform.api_key,
         mode=config_obj.platform.mode,
-        user_id=config_obj.platform.user_id,
         project_id=config_obj.platform.project_id,
         key_hash=config_obj.platform.key_hash,
     )
@@ -390,7 +441,7 @@ def _upload_bugs_to_platform(
 
 def _try_pull_memory(config_obj: Any, project_root: Path, ci_mode: bool) -> None:
     """Pull memory from platform before generation. No-op if platform not configured."""
-    if config_obj.platform.normalized_mode not in {"platform", "byok"}:
+    if config_obj.platform.normalized_mode != "byok":
         return
 
     try:
@@ -401,7 +452,6 @@ def _try_pull_memory(config_obj: Any, project_root: Path, ci_mode: bool) -> None
             url=config_obj.platform.url,
             api_key=config_obj.platform.api_key,
             mode=config_obj.platform.mode,
-            user_id=config_obj.platform.user_id,
             project_id=config_obj.platform.project_id,
             key_hash=config_obj.platform.key_hash,
         )
@@ -426,7 +476,7 @@ def _try_push_memory(
     source: str = "local",
 ) -> None:
     """Push memory to platform after a run. No-op if platform not configured."""
-    if config_obj.platform.normalized_mode not in {"platform", "byok"}:
+    if config_obj.platform.normalized_mode != "byok":
         return
 
     try:
@@ -437,7 +487,6 @@ def _try_push_memory(
             url=config_obj.platform.url,
             api_key=config_obj.platform.api_key,
             mode=config_obj.platform.mode,
-            user_id=config_obj.platform.user_id,
             project_id=config_obj.platform.project_id,
             key_hash=config_obj.platform.key_hash,
         )
@@ -462,6 +511,8 @@ def _build_profile(root: str) -> ProjectProfile:
     lang_profile = detect_languages(root)
     fw_profile = detect_frameworks(root)
     ws_profile = detect_workspace(root)
+    infra_profile = detect_infra(root)
+    dep_profile = detect_dependencies(root, workspace=ws_profile)
 
     profile = ProjectProfile(
         root=str(Path(root).resolve()),
@@ -469,6 +520,8 @@ def _build_profile(root: str) -> ProjectProfile:
         frameworks=fw_profile.frameworks,
         packages=ws_profile.packages,
         workspace_tool=ws_profile.tool,
+        infra_profile=infra_profile,
+        dependency_profile=dep_profile,
     )
 
     # Detect LLM usage in the project
@@ -552,6 +605,40 @@ def _display_profile(profile: ProjectProfile) -> None:
         console.print(
             f"[bold cyan]LLM Integrations:[/bold cyan] "
             f"{profile.llm_usage_count} usage(s) detected — providers: {providers}"
+        )
+        console.print()
+
+    # ── Infrastructure ────────────────────────────────────────────
+    if isinstance(profile.infra_profile, InfraProfile) and (
+        profile.infra_profile.has_ci
+        or profile.infra_profile.has_docker
+        or profile.infra_profile.makefiles
+    ):
+        infra_parts: list[str] = []
+        if profile.infra_profile.has_ci:
+            providers = ", ".join(profile.infra_profile.ci_providers)
+            infra_parts.append(f"CI/CD: {providers}")
+        if profile.infra_profile.has_docker:
+            infra_parts.append("Docker")
+        if profile.infra_profile.makefiles:
+            infra_parts.append("Makefile")
+        console.print(f"[bold cyan]Infrastructure:[/bold cyan] {' | '.join(infra_parts)}")
+        if profile.infra_profile.test_commands:
+            cmds = ", ".join(profile.infra_profile.test_commands[:5])
+            console.print(f"  Test commands: {cmds}")
+        console.print()
+
+    # ── Dependencies ──────────────────────────────────────────────
+    if isinstance(profile.dependency_profile, DependencyProfile) and (
+        profile.dependency_profile.external_dep_count > 0 or profile.dependency_profile.lock_files
+    ):
+        dep = profile.dependency_profile
+        lock_info = ", ".join(dep.lock_files) if dep.lock_files else "none"
+        console.print(
+            f"[bold cyan]Dependencies:[/bold cyan] "
+            f"{dep.external_dep_count} declared | "
+            f"{dep.internal_dep_count} internal | "
+            f"lock files: {lock_info}"
         )
         console.print()
 
@@ -2520,7 +2607,13 @@ def generate(
 
     # Check if LLM is configured
     if not _is_llm_runtime_configured(config):
-        reporter.print_error("LLM is not configured. Please run 'nit init' or set up .nit.yml")
+        reporter.print_error(
+            "LLM is not configured. Run 'nit init' or add to .nit.yml:\n"
+            "  llm:\n"
+            "    provider: openai  # or anthropic, ollama, etc.\n"
+            "    model: gpt-4o\n"
+            "    api_key: ${NIT_LLM_API_KEY}"
+        )
         raise click.Abort
 
     # Load or build profile
@@ -2558,6 +2651,7 @@ async def _run_generate(**kwargs: Any) -> None:
     E2EBuilder, and IntegrationBuilder agents.
     """
     from nit.agents.analyzers.coverage import CoverageAnalysisTask, CoverageAnalyzer
+    from nit.agents.builders.e2e import E2EBuilder, E2ETask
     from nit.agents.builders.infra import BootstrapTask, InfraBuilder
     from nit.agents.builders.integration import IntegrationBuilder, IntegrationBuildTask
     from nit.agents.builders.unit import BuildTask, UnitBuilder
@@ -2596,7 +2690,7 @@ async def _run_generate(**kwargs: Any) -> None:
 
     # Create LLM engine
     llm_config = load_llm_config(str(project_root))
-    engine = create_engine(llm_config)
+    engine = _safe_create_engine(llm_config, project_root=project_root)
 
     # Run coverage analysis to identify gaps
     reporter.print_info("Analyzing coverage gaps...")
@@ -2640,6 +2734,10 @@ async def _run_generate(**kwargs: Any) -> None:
     if test_type in ("integration", "all"):
         integration_builder = IntegrationBuilder(engine, project_root, enable_memory=True)
 
+    e2e_builder: E2EBuilder | None = None
+    if test_type in ("e2e", "all"):
+        e2e_builder = E2EBuilder(engine, project_root)
+
     for task in build_tasks:
         # Set framework on the task
         if not task.framework:
@@ -2649,7 +2747,13 @@ async def _run_generate(**kwargs: Any) -> None:
         output_path = _determine_test_output_path(task.source_file, primary_adapter, project_root)
         task.output_file = str(output_path)
 
-        if test_type == "integration" and integration_builder:
+        if test_type == "e2e" and e2e_builder:
+            e2e_task = E2ETask(
+                handler_file=task.source_file,
+                output_file=task.output_file,
+            )
+            result = await e2e_builder.run(e2e_task)
+        elif test_type == "integration" and integration_builder:
             # Run integration builder
             int_task = IntegrationBuildTask(
                 source_file=task.source_file,
@@ -3214,7 +3318,13 @@ def pick(**kwargs: Any) -> None:
 
     # Check if LLM is configured
     if not _is_llm_runtime_configured(config):
-        reporter.print_error("LLM is not configured. Please run 'nit init' or set up .nit.yml")
+        reporter.print_error(
+            "LLM is not configured. Run 'nit init' or add to .nit.yml:\n"
+            "  llm:\n"
+            "    provider: openai  # or anthropic, ollama, etc.\n"
+            "    model: gpt-4o\n"
+            "    api_key: ${NIT_LLM_API_KEY}"
+        )
         raise click.Abort
 
     # Resolve options: CLI flags override config defaults
@@ -3239,7 +3349,7 @@ def pick(**kwargs: Any) -> None:
     )
 
     # Upload report: default to True when platform is configured
-    platform_enabled = config.platform.normalized_mode in {"platform", "byok"}
+    platform_enabled = config.platform.normalized_mode == "byok"
     upload_report_flag: bool | None = kwargs.get("upload_report")
     if upload_report_flag is not None:
         upload_report = upload_report_flag
@@ -3695,11 +3805,6 @@ def debug(
 
     Auto-runs 'analyze' if no bugs have been found yet.
     """
-    # Note: bug_id and no_verify are not yet implemented
-    # They will be used in the full implementation
-    _ = bug_id
-    _ = no_verify
-
     ctx = click.get_current_context()
     ci_mode = ctx.obj.get("ci", False) if ctx.obj else False
 
@@ -3715,26 +3820,45 @@ def debug(
 
     # Check if LLM is configured
     if not _is_llm_runtime_configured(config):
-        reporter.print_error("LLM is not configured. Please run 'nit init' or set up .nit.yml")
+        reporter.print_error(
+            "LLM is not configured. Run 'nit init' or add to .nit.yml:\n"
+            "  llm:\n"
+            "    provider: openai  # or anthropic, ollama, etc.\n"
+            "    model: gpt-4o\n"
+            "    api_key: ${NIT_LLM_API_KEY}"
+        )
         raise click.Abort
 
-    # Delegate to pick with --fix flag
     if not ci_mode:
-        reporter.print_info("Debug command is currently implemented via 'pick --fix'")
+        if bug_id:
+            reporter.print_info(f"Filtering to bugs matching: {bug_id}")
+        if no_verify:
+            reporter.print_info("Fix verification disabled (--no-verify)")
         reporter.print_info("Running pick pipeline with fix mode enabled...")
 
-    ctx.invoke(
-        pick,
-        path=path,
+    # Run pick pipeline, then filter/apply results based on flags
+    pipeline_config = PickPipelineConfig(
+        project_root=Path(path).resolve(),
         test_type="all",
         target_file=target_file,
-        coverage_target=None,
-        fix=not dry_run,  # Don't apply fixes in dry-run mode
-        upload_report=False,
-        create_pr=False,
-        create_issues=False,
-        create_fix_prs=False,
+        fix_enabled=not dry_run,
+        ci_mode=ci_mode,
     )
+    result = asyncio.run(_run_pick_pipeline_with_result(pipeline_config))
+
+    # Filter to matching bugs if --bug-id provided
+    if bug_id and result.bugs_found:
+        needle = bug_id.lower()
+        matched = [b for b in result.bugs_found if needle in b.title.lower()]
+        if not matched:
+            reporter.print_warning(f"No bugs found matching '{bug_id}'")
+            reporter.print_info(f"Available bugs ({len(result.bugs_found)}):")
+            for bug in result.bugs_found:
+                reporter.print_info(f"  - {bug.title}")
+            return
+        if not ci_mode:
+            reporter.print_info(f"Matched {len(matched)} of {len(result.bugs_found)} bug(s)")
+        result.bugs_found = matched
 
 
 @cli.command()
@@ -3970,9 +4094,61 @@ def _drift_test(watcher: Any, tests_file: str) -> None:
         except Exception as exc:
             logger.warning("Failed to send Slack drift alert: %s", exc)
 
+    # Upload drift results to platform
+    _upload_drift_results(report)
+
     # Exit with error code if drift detected
     if report.drift_detected:
         sys.exit(1)
+
+
+def _upload_drift_results(report: Any) -> None:
+    """Upload drift test results to the platform if configured."""
+    if not report.results:
+        return
+
+    try:
+        config_obj = load_config(".")
+    except Exception:
+        return
+
+    mode = config_obj.platform.normalized_mode
+    if mode != "byok":
+        return
+
+    platform_config = PlatformRuntimeConfig(
+        url=config_obj.platform.url,
+        api_key=config_obj.platform.api_key,
+        mode=mode,
+        project_id=config_obj.platform.project_id,
+        key_hash=config_obj.platform.key_hash,
+    )
+
+    payloads: list[dict[str, Any]] = []
+    for r in report.results:
+        if r.error is not None:
+            status = "error"
+        elif r.passed:
+            status = "stable"
+        else:
+            status = "drifted"
+
+        payloads.append(
+            {
+                "testName": r.test_name,
+                "status": status,
+                "similarityScore": r.similarity_score,
+                "currentOutput": r.output or None,
+                "details": r.details if r.details else None,
+            }
+        )
+
+    try:
+        body = post_platform_drift(platform_config, payloads)
+        inserted = body.get("inserted", 0)
+        logger.info("Uploaded %d drift results to platform", inserted)
+    except PlatformClientError as exc:
+        logger.warning("Failed to upload drift results: %s", exc)
 
 
 def _drift_baseline(watcher: Any, tests_file: str) -> None:
@@ -4275,7 +4451,7 @@ def _docs_changelog(
             config = load_config(path)
             if _is_llm_runtime_configured(config):
                 llm_config = load_llm_config(path)
-                llm_engine = create_engine(llm_config)
+                llm_engine = create_engine(llm_config, project_root=root)
         except Exception as e:
             logger.debug("LLM not available for changelog polish: %s", e)
 
@@ -4476,7 +4652,13 @@ def _docs_readme(path: str, *, write: bool) -> None:
         raise click.Abort from e
 
     if not _is_llm_runtime_configured(config):
-        reporter.print_error("LLM is not configured. Run 'nit init' or set up .nit.yml")
+        reporter.print_error(
+            "LLM is not configured. Run 'nit init' or add to .nit.yml:\n"
+            "  llm:\n"
+            "    provider: openai  # or anthropic, ollama, etc.\n"
+            "    model: gpt-4o\n"
+            "    api_key: ${NIT_LLM_API_KEY}"
+        )
         raise click.Abort
 
     profile = load_profile(path)
@@ -4491,7 +4673,7 @@ def _docs_readme(path: str, *, write: bool) -> None:
         raise click.Abort
 
     llm_config = load_llm_config(path)
-    engine = create_engine(llm_config)
+    engine = _safe_create_engine(llm_config, project_root=Path(path).resolve())
     updater = ReadmeUpdater(engine)
 
     reporter.print_info("Generating README updates...")
@@ -4542,14 +4724,20 @@ def _docs_docstrings(
         raise click.Abort from e
 
     if not check_only and not _is_llm_runtime_configured(config):
-        reporter.print_error("LLM is not configured. Run 'nit init' or set up .nit.yml")
+        reporter.print_error(
+            "LLM is not configured. Run 'nit init' or add to .nit.yml:\n"
+            "  llm:\n"
+            "    provider: openai  # or anthropic, ollama, etc.\n"
+            "    model: gpt-4o\n"
+            "    api_key: ${NIT_LLM_API_KEY}"
+        )
         raise click.Abort
 
     # Create LLM engine (only if not check-only)
     engine = None
     if not check_only:
         llm_config = load_llm_config(path)
-        engine = create_engine(llm_config)
+        engine = _safe_create_engine(llm_config, project_root=Path(path).resolve())
 
     # Build docs config from .nit.yml with CLI overrides
     docs_config = config.docs
@@ -4574,7 +4762,6 @@ def _docs_docstrings(
     builder = DocBuilder(
         llm_engine=engine,  # type: ignore[arg-type]
         project_root=root,
-        docs_config=docs_config,
     )
 
     # Build task
@@ -4936,7 +5123,7 @@ def memory_pull(path: str) -> None:
     root = Path(path).resolve()
     config = load_config(str(root))
 
-    if config.platform.normalized_mode not in {"platform", "byok"}:
+    if config.platform.normalized_mode != "byok":
         reporter.print_error(
             "Platform not configured. Run `nit init` to set up platform integration."
         )
@@ -4949,7 +5136,6 @@ def memory_pull(path: str) -> None:
         url=config.platform.url,
         api_key=config.platform.api_key,
         mode=config.platform.mode,
-        user_id=config.platform.user_id,
         project_id=config.platform.project_id,
         key_hash=config.platform.key_hash,
     )
@@ -4994,7 +5180,7 @@ def memory_push(path: str) -> None:
     root = Path(path).resolve()
     config = load_config(str(root))
 
-    if config.platform.normalized_mode not in {"platform", "byok"}:
+    if config.platform.normalized_mode != "byok":
         reporter.print_error(
             "Platform not configured. Run `nit init` to set up platform integration."
         )
@@ -5007,7 +5193,6 @@ def memory_push(path: str) -> None:
         url=config.platform.url,
         api_key=config.platform.api_key,
         mode=config.platform.mode,
-        user_id=config.platform.user_id,
         project_id=config.platform.project_id,
         key_hash=config.platform.key_hash,
     )
@@ -5138,3 +5323,683 @@ def _display_package_memory(memory: Any) -> None:
     else:
         console.print("[dim]No LLM feedback recorded[/dim]")
         console.print()
+
+
+# ── Prompt Tracking Commands ─────────────────────────────────────
+
+_MAX_SOURCE_DISPLAY = 22
+_MSG_TRUNCATE_CHARS = 200
+_RESPONSE_TRUNCATE_CHARS = 500
+
+
+@cli.group("prompts")
+def prompts_group() -> None:
+    """Track, replay, and compare LLM prompts."""
+
+
+@prompts_group.command("list")
+@click.option(
+    "--path",
+    default=".",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    help="Project root directory.",
+)
+@click.option("--limit", default=20, type=int, help="Maximum records to show.")
+@click.option("--model", default=None, type=str, help="Filter by model name.")
+@click.option("--template", default=None, type=str, help="Filter by template name.")
+@click.option(
+    "--outcome", default=None, type=str, help="Filter by outcome (success, pending, error)."
+)
+@click.option("--since", default=None, type=str, help="Show records after this ISO date.")
+@click.option(
+    "--json-output",
+    "as_json",
+    is_flag=True,
+    help="Output as JSON.",
+)
+def prompts_list(
+    path: str,
+    limit: int,
+    *,
+    as_json: bool,
+    **filters: str | None,
+) -> None:
+    """List recent prompt records.
+
+    Examples:
+        nit prompts list                          # Show last 20 prompts
+        nit prompts list --model claude           # Filter by model
+        nit prompts list --template pytest --limit 5
+    """
+    from nit.memory.prompt_store import get_prompt_recorder
+
+    project_root = Path(path).resolve()
+    recorder = get_prompt_recorder(project_root)
+
+    model = str(filters["model"]) if filters.get("model") else None
+    template = str(filters["template"]) if filters.get("template") else None
+    outcome = str(filters["outcome"]) if filters.get("outcome") else None
+    since = str(filters["since"]) if filters.get("since") else None
+
+    records = recorder.read_all(
+        limit=limit,
+        since=since,
+        model=model,
+        template=template,
+        outcome=outcome,
+    )
+
+    if as_json:
+        import json
+
+        console.print(json.dumps([r.to_dict() for r in records], indent=2))
+        return
+
+    if not records:
+        console.print("[dim]No prompt records found.[/dim]")
+        return
+
+    table = Table(title=f"Prompt Records ({len(records)})")
+    table.add_column("ID", style="cyan", width=10)
+    table.add_column("Timestamp", width=20)
+    table.add_column("Model", style="green", width=20)
+    table.add_column("Template", width=16)
+    table.add_column("Source", width=24)
+    table.add_column("Outcome", width=12)
+    table.add_column("Tokens", justify="right", width=8)
+    table.add_column("Duration", justify="right", width=10)
+
+    for rec in records:
+        template_name = rec.lineage.template_name if rec.lineage else "-"
+        source_file = rec.lineage.source_file if rec.lineage else "-"
+        if len(source_file) > _MAX_SOURCE_DISPLAY:
+            source_file = "..." + source_file[-(_MAX_SOURCE_DISPLAY - 3) :]
+
+        outcome_style = {
+            "success": "green",
+            "pending": "yellow",
+            "error": "red",
+            "test_failure": "red",
+            "syntax_error": "red",
+        }.get(rec.outcome, "white")
+
+        ts_display = rec.timestamp[:19].replace("T", " ")
+
+        table.add_row(
+            rec.short_id,
+            ts_display,
+            rec.model,
+            template_name,
+            source_file,
+            Text(rec.outcome, style=outcome_style),
+            str(rec.total_tokens),
+            f"{rec.duration_ms}ms",
+        )
+
+    console.print(table)
+
+
+@prompts_group.command("show")
+@click.argument("record_id")
+@click.option(
+    "--path",
+    default=".",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    help="Project root directory.",
+)
+@click.option("--full", is_flag=True, help="Show full message content.")
+def prompts_show(record_id: str, path: str, *, full: bool) -> None:
+    """Show full lineage for a prompt record.
+
+    Examples:
+        nit prompts show abc12345
+        nit prompts show abc12345 --full
+    """
+    from rich.panel import Panel
+    from rich.syntax import Syntax
+
+    from nit.memory.prompt_store import get_prompt_recorder
+
+    project_root = Path(path).resolve()
+    recorder = get_prompt_recorder(project_root)
+
+    # Support short IDs (prefix match)
+    record = recorder.get_by_id(record_id)
+    if record is None:
+        # Try prefix match
+        all_records = recorder.read_all()
+        matches = [r for r in all_records if r.id.startswith(record_id)]
+        if len(matches) == 1:
+            record = matches[0]
+        elif len(matches) > 1:
+            console.print(f"[red]Ambiguous ID prefix '{record_id}'. Matches:[/red]")
+            for m in matches[:5]:
+                console.print(f"  {m.short_id}  {m.model}  {m.timestamp[:19]}")
+            return
+        else:
+            console.print(f"[red]Prompt record not found: {record_id}[/red]")
+            return
+
+    # Header
+    console.print(Panel(f"[bold]Prompt Record: {record.id}[/bold]", style="cyan"))
+
+    # Metadata table
+    meta = Table(show_header=False, box=None, padding=(0, 2))
+    meta.add_column("Key", style="bold")
+    meta.add_column("Value")
+    meta.add_row("Timestamp", record.timestamp[:19].replace("T", " "))
+    meta.add_row("Session", record.session_id[:12] + "...")
+    meta.add_row("Model", record.model)
+    meta.add_row("Temperature", str(record.temperature))
+    meta.add_row("Max Tokens", str(record.max_tokens))
+    meta.add_row("Prompt Tokens", str(record.prompt_tokens))
+    meta.add_row("Completion Tokens", str(record.completion_tokens))
+    meta.add_row("Total Tokens", str(record.total_tokens))
+    meta.add_row("Duration", f"{record.duration_ms}ms")
+    meta.add_row("Outcome", record.outcome)
+    if record.validation_attempts:
+        meta.add_row("Validation Attempts", str(record.validation_attempts))
+    if record.error_message:
+        meta.add_row("Error", record.error_message[:80])
+    console.print(meta)
+    console.print()
+
+    # Lineage
+    if record.lineage:
+        console.print("[bold]Lineage:[/bold]")
+        lineage_table = Table(show_header=False, box=None, padding=(0, 2))
+        lineage_table.add_column("Key", style="bold")
+        lineage_table.add_column("Value")
+        lineage_table.add_row("Source File", record.lineage.source_file)
+        lineage_table.add_row("Template", record.lineage.template_name)
+        lineage_table.add_row("Builder", record.lineage.builder_name)
+        if record.lineage.framework:
+            lineage_table.add_row("Framework", record.lineage.framework)
+        if record.lineage.context_tokens:
+            lineage_table.add_row("Context Tokens", str(record.lineage.context_tokens))
+        console.print(lineage_table)
+        console.print()
+
+    # Messages
+    console.print("[bold]Messages:[/bold]")
+    for msg in record.messages:
+        role = msg.get("role", "unknown")
+        content = msg.get("content", "")
+        if not full and len(content) > _MSG_TRUNCATE_CHARS:
+            content = (
+                content[:_MSG_TRUNCATE_CHARS] + f"... ({len(content)} chars total, use --full)"
+            )
+        console.print(f"  [{role.upper()}]")
+        console.print(Syntax(content, "text", word_wrap=True))
+        console.print()
+
+    # Response
+    console.print("[bold]Response:[/bold]")
+    response_text = record.response_text
+    if not full and len(response_text) > _RESPONSE_TRUNCATE_CHARS:
+        response_text = (
+            response_text[:_RESPONSE_TRUNCATE_CHARS]
+            + f"\n... ({len(record.response_text)} chars total, use --full)"
+        )
+    console.print(Syntax(response_text, "text", word_wrap=True))
+
+
+@prompts_group.command("replay")
+@click.argument("record_id")
+@click.option("--model", required=True, type=str, help="Model to replay with.")
+@click.option("--temperature", default=None, type=float, help="Override temperature.")
+@click.option(
+    "--path",
+    default=".",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    help="Project root directory.",
+)
+def prompts_replay(record_id: str, model: str, temperature: float | None, path: str) -> None:
+    """Replay a prompt with a different model.
+
+    Examples:
+        nit prompts replay abc12345 --model claude-sonnet-4-5-20250929
+    """
+    from nit.agents.replay import PromptReplayer
+    from nit.memory.prompt_store import get_prompt_recorder
+
+    project_root = Path(path).resolve()
+    recorder = get_prompt_recorder(project_root)
+
+    # Resolve record
+    record = _resolve_prompt_record(recorder, record_id)
+    if record is None:
+        return
+
+    # Create replayer
+    llm_config = load_llm_config(str(project_root))
+    replayer = PromptReplayer(recorder=recorder, llm_config=llm_config)
+
+    reporter.print_info(f"Replaying prompt {record.short_id} with model {model}...")
+
+    result = asyncio.run(replayer.replay(record.id, model=model, temperature=temperature))
+
+    # Show comparison
+    console.print()
+    table = Table(title="Replay Comparison")
+    table.add_column("", style="bold")
+    table.add_column("Original", style="cyan")
+    table.add_column("Replay", style="green")
+    table.add_row("Model", result.original.model, result.replay.model)
+    table.add_row("Tokens", str(result.original.total_tokens), str(result.replay.total_tokens))
+    table.add_row("Duration", f"{result.original.duration_ms}ms", f"{result.replay.duration_ms}ms")
+    console.print(table)
+
+    if result.diff:
+        console.print()
+        console.print("[bold]Response Diff:[/bold]")
+        from rich.syntax import Syntax
+
+        console.print(Syntax(result.diff, "diff", word_wrap=True))
+    else:
+        console.print()
+        console.print("[dim]Responses are identical.[/dim]")
+
+
+@prompts_group.command("compare")
+@click.argument("id1")
+@click.argument("id2")
+@click.option(
+    "--path",
+    default=".",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    help="Project root directory.",
+)
+def prompts_compare(id1: str, id2: str, path: str) -> None:
+    """Compare outputs of two prompt records.
+
+    Examples:
+        nit prompts compare abc12345 def67890
+    """
+    from nit.agents.replay import compute_diff
+    from nit.memory.prompt_store import get_prompt_recorder
+
+    project_root = Path(path).resolve()
+    recorder = get_prompt_recorder(project_root)
+
+    rec1 = _resolve_prompt_record(recorder, id1)
+    rec2 = _resolve_prompt_record(recorder, id2)
+    if rec1 is None or rec2 is None:
+        return
+
+    # Metadata comparison
+    table = Table(title="Prompt Comparison")
+    table.add_column("", style="bold")
+    table.add_column(rec1.short_id, style="cyan")
+    table.add_column(rec2.short_id, style="green")
+    table.add_row("Model", rec1.model, rec2.model)
+    table.add_row("Tokens", str(rec1.total_tokens), str(rec2.total_tokens))
+    table.add_row("Duration", f"{rec1.duration_ms}ms", f"{rec2.duration_ms}ms")
+    table.add_row("Outcome", rec1.outcome, rec2.outcome)
+    console.print(table)
+
+    diff = compute_diff(rec1.response_text, rec2.response_text, rec1.short_id, rec2.short_id)
+    if diff:
+        console.print()
+        console.print("[bold]Response Diff:[/bold]")
+        from rich.syntax import Syntax
+
+        console.print(Syntax(diff, "diff", word_wrap=True))
+    else:
+        console.print()
+        console.print("[dim]Responses are identical.[/dim]")
+
+
+@prompts_group.command("arena")
+@click.argument("record_id")
+@click.option("--models", required=True, type=str, help="Comma-separated model list.")
+@click.option(
+    "--path",
+    default=".",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    help="Project root directory.",
+)
+def prompts_arena(record_id: str, models: str, path: str) -> None:
+    """Run a prompt against multiple models and rank results.
+
+    Examples:
+        nit prompts arena abc12345 --models "gpt-4o,claude-sonnet-4-5-20250929"
+    """
+    from nit.agents.replay import PromptReplayer
+    from nit.memory.prompt_store import get_prompt_recorder
+
+    project_root = Path(path).resolve()
+    recorder = get_prompt_recorder(project_root)
+
+    record = _resolve_prompt_record(recorder, record_id)
+    if record is None:
+        return
+
+    model_list = [m.strip() for m in models.split(",") if m.strip()]
+    if not model_list:
+        console.print("[red]No models specified.[/red]")
+        return
+
+    llm_config = load_llm_config(str(project_root))
+    replayer = PromptReplayer(recorder=recorder, llm_config=llm_config)
+
+    reporter.print_info(
+        f"Running arena for prompt {record.short_id} against {len(model_list)} models..."
+    )
+
+    results = asyncio.run(replayer.arena(record.id, model_list))
+
+    # Build results table
+    table = Table(title=f"Arena Results (original: {record.model})")
+    table.add_column("Rank", justify="right", width=5)
+    table.add_column("Model", style="green", width=30)
+    table.add_column("Tokens", justify="right", width=8)
+    table.add_column("Duration", justify="right", width=10)
+    table.add_column("Response Length", justify="right", width=14)
+
+    # Sort by token efficiency (fewer tokens = better)
+    sorted_results = sorted(results, key=lambda r: r.replay.total_tokens)
+
+    for rank, result in enumerate(sorted_results, 1):
+        style = "bold" if rank == 1 else ""
+        table.add_row(
+            str(rank),
+            Text(result.replay.model, style=style),
+            str(result.replay.total_tokens),
+            f"{result.replay.duration_ms}ms",
+            str(len(result.replay.response_text)),
+        )
+
+    console.print()
+    console.print(table)
+
+
+@prompts_group.command("apply")
+@click.argument("record_id")
+@click.option(
+    "--path",
+    default=".",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    help="Project root directory.",
+)
+@click.option("--pr", is_flag=True, help="Create a PR with the changes.")
+@click.option("--patch", is_flag=True, help="Generate a git patch file.")
+def prompts_apply(record_id: str, path: str, *, pr: bool, patch: bool) -> None:
+    """Apply a prompt's output to the project.
+
+    Three modes:
+      - Default: Write output to file from lineage
+      - --pr: Create a branch and PR
+      - --patch: Generate a .patch file
+
+    Examples:
+        nit prompts apply abc12345
+        nit prompts apply abc12345 --pr
+        nit prompts apply abc12345 --patch
+    """
+    from nit.memory.prompt_store import get_prompt_recorder
+
+    project_root = Path(path).resolve()
+    recorder = get_prompt_recorder(project_root)
+
+    record = _resolve_prompt_record(recorder, record_id)
+    if record is None:
+        return
+
+    if not record.response_text.strip():
+        console.print("[red]Prompt record has no response text to apply.[/red]")
+        return
+
+    if not record.lineage:
+        console.print("[red]Prompt record has no lineage (unknown output file).[/red]")
+        return
+
+    output_file = _infer_output_file(record, project_root)
+    if output_file is None:
+        console.print("[red]Could not determine output file from lineage.[/red]")
+        return
+
+    # Extract code from response (strip markdown fences)
+    code = _extract_code_from_response(record.response_text)
+
+    if patch:
+        # Generate patch file
+        patch_path = project_root / f"prompt-{record.short_id}.patch"
+        _write_patch_file(patch_path, output_file, code, project_root)
+        reporter.print_success(f"Patch written to {patch_path}")
+        return
+
+    if pr:
+        # Create branch, write, commit, push, PR
+        from nit.utils.git import add_files, commit, create_branch, push_branch
+
+        branch_name = f"nit/prompt-apply-{record.short_id}"
+        create_branch(project_root, branch_name)
+
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text(code, encoding="utf-8")
+
+        rel_path = str(output_file.relative_to(project_root))
+        add_files(project_root, [rel_path])
+        commit(
+            project_root,
+            f"Apply prompt {record.short_id} output ({record.lineage.template_name})",
+        )
+        push_branch(project_root, branch_name)
+
+        # Create PR via gh CLI
+        _create_apply_pr(record, project_root)
+        return
+
+    # Default: write to file
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text(code, encoding="utf-8")
+    reporter.print_success(f"Output written to {output_file}")
+
+
+@prompts_group.command("analytics")
+@click.option(
+    "--path",
+    default=".",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    help="Project root directory.",
+)
+@click.option("--days", default=30, type=int, help="Number of days to analyze.")
+@click.option(
+    "--json-output",
+    "as_json",
+    is_flag=True,
+    help="Output as JSON.",
+)
+def prompts_analytics(path: str, days: int, *, as_json: bool) -> None:
+    """Show prompt efficiency statistics.
+
+    Examples:
+        nit prompts analytics
+        nit prompts analytics --days 7 --json-output
+    """
+    from nit.memory.prompt_analytics import PromptAnalytics
+    from nit.memory.prompt_store import get_prompt_recorder
+
+    project_root = Path(path).resolve()
+    recorder = get_prompt_recorder(project_root)
+    analytics = PromptAnalytics(recorder)
+
+    stats = analytics.summary(days=days)
+
+    if as_json:
+        import json
+
+        console.print(json.dumps(stats, indent=2))
+        return
+
+    if not stats.get("total_prompts"):
+        console.print("[dim]No prompt records found in the last {days} days.[/dim]")
+        return
+
+    # Overview
+    console.print(f"[bold]Prompt Analytics (last {days} days)[/bold]")
+    console.print()
+
+    overview = Table(show_header=False, box=None, padding=(0, 2))
+    overview.add_column("Metric", style="bold")
+    overview.add_column("Value")
+    overview.add_row("Total Prompts", str(stats["total_prompts"]))
+    overview.add_row("Success Rate", f"{stats['success_rate']:.1%}")
+    overview.add_row("Total Tokens", f"{stats['total_tokens']:,}")
+    overview.add_row("Avg Duration", f"{stats['avg_duration_ms']:.0f}ms")
+    console.print(overview)
+    console.print()
+
+    # By model
+    by_model = stats.get("by_model", {})
+    if by_model:
+        model_table = Table(title="By Model")
+        model_table.add_column("Model", width=25)
+        model_table.add_column("Count", justify="right")
+        model_table.add_column("Success Rate", justify="right")
+        model_table.add_column("Avg Tokens", justify="right")
+        for model_name, model_stats in by_model.items():
+            model_table.add_row(
+                model_name,
+                str(model_stats["count"]),
+                f"{model_stats['success_rate']:.1%}",
+                str(model_stats["avg_tokens"]),
+            )
+        console.print(model_table)
+        console.print()
+
+    # By template
+    by_template = stats.get("by_template", {})
+    if by_template:
+        tmpl_table = Table(title="By Template")
+        tmpl_table.add_column("Template", width=20)
+        tmpl_table.add_column("Count", justify="right")
+        tmpl_table.add_column("Success Rate", justify="right")
+        tmpl_table.add_column("Avg Tokens", justify="right")
+        for tmpl_name, tmpl_stats in by_template.items():
+            tmpl_table.add_row(
+                tmpl_name,
+                str(tmpl_stats["count"]),
+                f"{tmpl_stats['success_rate']:.1%}",
+                str(tmpl_stats["avg_tokens"]),
+            )
+        console.print(tmpl_table)
+
+
+# ── Prompt CLI helpers ───────────────────────────────────────────
+
+
+def _resolve_prompt_record(
+    recorder: Any,
+    record_id: str,
+) -> Any:
+    """Resolve a record ID (supports prefix match)."""
+    record = recorder.get_by_id(record_id)
+    if record is not None:
+        return record
+
+    # Try prefix match
+    all_records = recorder.read_all()
+    matches = [r for r in all_records if r.id.startswith(record_id)]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        console.print(f"[red]Ambiguous ID prefix '{record_id}'. Matches:[/red]")
+        for m in matches[:5]:
+            console.print(f"  {m.short_id}  {m.model}  {m.timestamp[:19]}")
+        return None
+
+    console.print(f"[red]Prompt record not found: {record_id}[/red]")
+    return None
+
+
+def _infer_output_file(record: Any, project_root: Path) -> Path | None:
+    """Infer the output file path from lineage."""
+    if not record.lineage:
+        return None
+
+    source = str(record.lineage.source_file)
+    if not source:
+        return None
+
+    source_path = Path(source)
+
+    # For test builders, infer test file path
+    if record.lineage.builder_name in {"unit_builder", "e2e_builder", "integration_builder"}:
+        # Simple heuristic: add test_ prefix or _test suffix
+        stem = source_path.stem
+        suffix = source_path.suffix
+        parent = source_path.parent
+
+        if suffix in {".py"}:
+            return project_root / parent / f"test_{stem}{suffix}"
+        if suffix in {".ts", ".tsx", ".js", ".jsx"}:
+            return project_root / parent / f"{stem}.test{suffix}"
+        return project_root / parent / f"test_{stem}{suffix}"
+
+    # For doc builder, output to same file
+    return project_root / source
+
+
+def _create_apply_pr(record: Any, project_root: Path) -> None:
+    """Create a PR for an applied prompt output using gh CLI."""
+    import subprocess
+
+    template_name = record.lineage.template_name if record.lineage else "unknown"
+    title = f"Apply prompt {record.short_id}: {template_name}"
+    body = (
+        "## Prompt Replay Apply\n\n"
+        f"- **Prompt ID**: `{record.id}`\n"
+        f"- **Model**: {record.model}\n"
+        f"- **Template**: {template_name}\n"
+    )
+    if record.lineage:
+        body += f"- **Source File**: {record.lineage.source_file}\n"
+
+    result = subprocess.run(
+        ["gh", "pr", "create", "--title", title, "--body", body],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        console.print(f"[green]PR created: {result.stdout.strip()}[/green]")
+    else:
+        console.print(f"[red]PR creation failed: {result.stderr.strip()}[/red]")
+
+
+def _extract_code_from_response(response_text: str) -> str:
+    """Extract code from an LLM response, stripping markdown fences."""
+    import re
+
+    # Strip markdown code fences
+    pattern = r"```(?:\w+)?\n(.*?)```"
+    matches = re.findall(pattern, response_text, re.DOTALL)
+    if matches:
+        return "\n\n".join(matches)
+    return response_text
+
+
+def _write_patch_file(
+    patch_path: Path,
+    output_file: Path,
+    code: str,
+    project_root: Path,
+) -> None:
+    """Write a unified diff patch file."""
+    import difflib
+
+    rel_path = str(output_file.relative_to(project_root))
+    existing = ""
+    if output_file.exists():
+        existing = output_file.read_text(encoding="utf-8")
+
+    diff_lines = difflib.unified_diff(
+        existing.splitlines(keepends=True),
+        code.splitlines(keepends=True),
+        fromfile=f"a/{rel_path}",
+        tofile=f"b/{rel_path}",
+    )
+    patch_path.write_text("".join(diff_lines), encoding="utf-8")

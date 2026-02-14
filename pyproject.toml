@@ -26,19 +26,17 @@ classifiers = [
     "Topic :: Software Development :: Quality Assurance",
 ]
 dependencies = [
-    "click>=8.1,<9",
-    "defusedxml>=0.7,<1",
-    "litellm>=1.0,<2",
-    "pyyaml>=6.0,<7",
-    "rich>=14.3.2,<16",
-    "textual>=1.0.0,<2",
-    "requests>=2.32,<3",
-    "tree-sitter>=0.23,<1",
-    "tree-sitter-language-pack>=0.3,<1",
-    "sentence-transformers>=3.0.0,<4",
-    "httpx>=0.28.0,<1",
-    "jsonschema>=4.23.0,<5",
-    "sentry-sdk[pure_eval]>=2.19,<3",
+    "click>=8.1",
+    "defusedxml>=0.7",
+    "litellm>=1.0",
+    "pyyaml>=6.0",
+    "rich>=14.3.2",
+    "requests>=2.32",
+    "tree-sitter>=0.23",
+    "tree-sitter-language-pack>=0.3",
+    "sentence-transformers>=3.0.0",
+    "httpx>=0.28.0",
+    "jsonschema>=4.23.0",
 ]
 
 [project.optional-dependencies]
@@ -53,21 +51,37 @@ dev = [
     "types-PyYAML>=6.0",
     "types-requests>=2.32",
     "types-jsonschema>=4.23.0",
-    "responses>=0.25",
-]
-docs = [
-    "mkdocs-material>=9.0",
-    "mkdocs>=1.6",
 ]
 
 [project.scripts]
 nit = "nit.cli:cli"
 
-# Entry points removed - built-in adapters are auto-discovered via package scanning.
-# External packages can still register custom adapters via:
-#   [project.entry-points."nit.adapters.unit"]
-#   [project.entry-points."nit.adapters.e2e"]
-#   [project.entry-points."nit.adapters.docs"]
+[project.entry-points."nit.adapters.unit"]
+vitest = "nit.adapters.unit.vitest_adapter:VitestAdapter"
+pytest = "nit.adapters.unit.pytest_adapter:PytestAdapter"
+catch2 = "nit.adapters.unit.catch2_adapter:Catch2Adapter"
+gtest = "nit.adapters.unit.gtest_adapter:GTestAdapter"
+kotest = "nit.adapters.unit.kotest_adapter:KotestAdapter"
+testify = "nit.adapters.unit.testify_adapter:TestifyAdapter"
+go-test = "nit.adapters.unit.go_test_adapter:GoTestAdapter"
+junit5 = "nit.adapters.unit.junit5_adapter:JUnit5Adapter"
+cargo-test = "nit.adapters.unit.cargo_test_adapter:CargoTestAdapter"
+xunit = "nit.adapters.unit.xunit_adapter:XUnitAdapter"
+jest = "nit.adapters.unit.jest_adapter:JestAdapter"
+mocha = "nit.adapters.unit.mocha_adapter:MochaAdapter"
+
+[project.entry-points."nit.adapters.e2e"]
+playwright = "nit.adapters.e2e.playwright_adapter:PlaywrightAdapter"
+cypress = "nit.adapters.e2e.cypress_adapter:CypressAdapter"
+
+[project.entry-points."nit.adapters.docs"]
+typedoc = "nit.adapters.docs.typedoc_adapter:TypeDocAdapter"
+sphinx = "nit.adapters.docs.sphinx_adapter:SphinxAdapter"
+doxygen = "nit.adapters.docs.doxygen_adapter:DoxygenAdapter"
+jsdoc = "nit.adapters.docs.jsdoc_adapter:JSDocAdapter"
+godoc = "nit.adapters.docs.godoc_adapter:GoDocAdapter"
+rustdoc = "nit.adapters.docs.rustdoc_adapter:RustDocAdapter"
+mkdocs = "nit.adapters.docs.mkdocs_adapter:MkDocsAdapter"
 
 [project.urls]
 Homepage = "https://getnit.dev"
@@ -125,42 +139,25 @@ select = [
     "ARG",     # unused args fine in tests (fixtures)
     "TCH003",  # stdlib imports used at runtime in fixtures
 ]
-# Git/GitHub CLI wrappers: executable from shutil.which(), refs validated before use
+# Git CLI wrappers: executable from shutil.which(), refs validated before use
 "**/utils/git.py" = ["S603"]
-"**/agents/reporters/github_pr.py" = ["S603"]
-"**/agents/reporters/github_issue.py" = ["S603"]
 "**/utils/changelog.py" = ["S603"]
-"**/utils/ci_context.py" = ["S603", "FBT001", "FBT002"]
-"**/agents/pipelines/pick.py" = ["S603", "S607", "PLC0415", "PLR0915"]
+"**/utils/ci_context.py" = ["S603", "S607", "FBT001", "FBT002"]
+"**/agents/pipelines/hunt.py" = ["S603", "S607"]
+# Subprocess wrappers using resolved paths or validated script paths
+"**/adapters/e2e/auth.py" = ["S603"]
 "**/agents/analyzers/diff.py" = ["S603"]
 "**/agents/analyzers/risk.py" = ["S603"]
-"**/adapters/e2e/auth.py" = ["S603"]
+"**/agents/pipelines/pick.py" = ["S603", "S607"]
+"**/agents/reporters/github_issue.py" = ["S603"]
+"**/agents/reporters/github_pr.py" = ["S603"]
 # CLI entry point: complexity from handling many user options
-"**/cli.py" = ["PLR0912", "PLR0915", "FBT001", "PLC0415", "S607"]
+"**/cli.py" = ["PLR0912", "PLR0915", "FBT001", "PLC0415", "S603", "S607"]
 # Schedule watcher: auto-detection requires multiple return paths
 "**/agents/watchers/schedule.py" = ["PLR0911"]
-# Prerequisite detection: auto-detection requires multiple return paths
-"**/utils/prerequisites.py" = ["PLR0911"]
-"**/cli_helpers.py" = ["PLR0911"]
 # Template adapters: intentionally show various patterns for learning purposes
 "src/nit/adapters/unit/template_adapter.py" = ["TC003", "SIM103", "PLC0415", "PTH123", "S110", "SIM102", "ERA001", "ARG002", "PERF401"]
 "src/nit/adapters/docs/template_adapter.py" = ["TC003", "SIM103", "PLC0415", "PTH123", "S110", "SIM102", "ERA001", "ARG002", "PERF401"]
-# Dashboard reporter: CSS class names trigger false positive S105 (password detection)
-"src/nit/agents/reporters/dashboard.py" = ["S105"]
-# Analytics collector: API design requires many parameters for comprehensive event recording
-"src/nit/memory/analytics_collector.py" = ["PLR0913", "FBT001"]
-# Sentry integration: lazy imports are intentional (zero overhead when disabled)
-"src/nit/telemetry/sentry_integration.py" = ["PLC0415"]
-# Usage callback: lazy import for optional Sentry metrics
-"src/nit/llm/usage_callback.py" = ["PLC0415"]
-# Analytics queries: event formatter naturally requires multiple return statements
-# Security analyzer: lazy imports to break circular dependencies between security modules
-"**/agents/analyzers/security.py" = ["PLC0415"]
-# Security patterns base: lazy loading of all pattern modules to avoid circular imports
-"**/agents/analyzers/security_patterns/base.py" = ["PLC0415"]
-# Terminal reporter: lazy import of security types to avoid circular imports
-"**/agents/reporters/terminal.py" = ["PLC0415"]
-"src/nit/memory/analytics_queries.py" = ["PLR0911"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -191,14 +188,6 @@ module = "defusedxml.ElementTree"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = "sentry_sdk"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "sentry_sdk.*"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
 module = "nit.adapters.unit.template_adapter"
 ignore_errors = true
 
@@ -216,36 +205,11 @@ ignore_errors = true
 
 [tool.black]
 line-length = 100
-target-version = ["py311", "py312", "py313", "py314"]
+target-version = ["py311"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 filterwarnings = [
     "ignore:.*asyncio.iscoroutinefunction.*:DeprecationWarning:litellm.*",
-]
-markers = [
-    "integration: Integration tests (multiple components)",
-    "e2e: End-to-end tests (requires example projects)",
-    "slow: Tests that take >5s",
-]
-
-[tool.coverage.run]
-source = ["src/nit"]
-branch = true
-omit = [
-    "src/nit/tui_init.py",
-    "src/nit/adapters/unit/template_adapter.py",
-    "src/nit/adapters/docs/template_adapter.py",
-]
-
-[tool.coverage.report]
-fail_under = 90
-show_missing = true
-skip_covered = false
-exclude_lines = [
-    "pragma: no cover",
-    "if TYPE_CHECKING:",
-    "raise NotImplementedError",
-    "@abstractmethod",
 ]

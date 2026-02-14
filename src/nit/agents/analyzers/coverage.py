@@ -12,6 +12,7 @@ This agent (task 1.19):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import sys
@@ -27,18 +28,21 @@ from nit.adapters.coverage import (
     IstanbulAdapter,
     JaCoCoAdapter,
 )
+from nit.adapters.coverage.base import CoverageReport
 from nit.agents.base import BaseAgent, TaskInput, TaskOutput, TaskStatus
 from nit.agents.builders.unit import BuildTask
+from nit.agents.detectors.workspace import detect_workspace
+from nit.agents.reporters.terminal import reporter
 from nit.parsing.languages import extract_from_file
 from nit.parsing.treesitter import detect_language
 
 if TYPE_CHECKING:
     from nit.adapters.coverage.base import (
         CoverageAdapter,
-        CoverageReport,
         FileCoverage,
         FunctionCoverage,
     )
+    from nit.agents.detectors.workspace import PackageInfo, WorkspaceProfile
     from nit.parsing.treesitter import FunctionInfo
 
 logger = logging.getLogger(__name__)
@@ -238,16 +242,22 @@ class CoverageAnalyzer(BaseAgent):
 
             # Step 1: Run coverage tool and get report (task 1.19.1)
             coverage_report = await self._run_coverage(project_root)
-            if coverage_report is None:
-                return TaskOutput(
-                    status=TaskStatus.FAILED,
-                    errors=["No coverage adapter found or coverage collection failed"],
-                )
-
-            logger.info("Coverage collected: %.1f%% overall", coverage_report.overall_line_coverage)
 
             # Step 2: Identify gaps (tasks 1.19.2, 1.19.3)
-            gap_report = self._analyze_gaps(coverage_report, task.coverage_threshold)
+            if coverage_report is not None and coverage_report.files:
+                logger.info(
+                    "Coverage collected: %.1f%% overall (%d files)",
+                    coverage_report.overall_line_coverage,
+                    len(coverage_report.files),
+                )
+                gap_report = self._analyze_gaps(coverage_report, task.coverage_threshold)
+            else:
+                # No coverage data available — fall back to source-file scanning.
+                # This finds all source files that have no corresponding test file
+                # and reports every public function as a gap.
+                logger.warning("No coverage data available — falling back to source-file scanning")
+                coverage_report = CoverageReport()
+                gap_report = self._scan_for_untested_sources(project_root, task.coverage_threshold)
 
             logger.info(
                 "Gap analysis complete: %d untested files, %d function gaps, %d stale tests",
@@ -280,23 +290,150 @@ class CoverageAnalyzer(BaseAgent):
     async def _run_coverage(self, project_root: Path) -> CoverageReport | None:
         """Run coverage tool and return unified report.
 
+        For monorepos, iterates over each package and runs the appropriate
+        coverage adapter per-package, then merges results.  For single-repo
+        projects, tries adapters in order at the project root.
+
         Args:
             project_root: Root directory of the project.
 
         Returns:
             CoverageReport or None if no adapter found.
         """
-        # Try to find a coverage adapter that can run in this project
+        # Check if this is a monorepo — if so, collect coverage per-package
+        workspace = detect_workspace(project_root)
+        if workspace.is_monorepo:
+            report = await self._run_coverage_monorepo(project_root, workspace)
+            if report is not None:
+                return report
+            logger.info("Monorepo per-package coverage yielded no data, trying root-level")
+
+        # Single-repo (or monorepo fallback): try adapters at the project root.
+        # Try ALL matching adapters and merge, so multi-language repos are covered.
+        merged = CoverageReport()
         for adapter in self._coverage_adapters:
             if adapter.detect(project_root):
                 logger.info("Using coverage adapter: %s", adapter.name)
                 try:
-                    return await adapter.run_coverage(project_root)
+                    report = await adapter.run_coverage(project_root)
+                    if report and report.files:
+                        for fpath, fcov in report.files.items():
+                            norm = self._normalize_coverage_path(fpath, project_root)
+                            merged.files[norm] = fcov
                 except Exception as exc:
                     logger.warning("Coverage adapter %s failed: %s", adapter.name, exc)
+                    reporter.print_warning(
+                        f"Coverage adapter '{adapter.name}' failed: {exc}. "
+                        "Some coverage data may be incomplete."
+                    )
+
+        if merged.files:
+            return merged
 
         logger.warning("No coverage adapter could run for %s", project_root)
         return None
+
+    async def _run_coverage_monorepo(
+        self, project_root: Path, workspace: WorkspaceProfile
+    ) -> CoverageReport | None:
+        """Run coverage per-package in a monorepo and merge results.
+
+        Each package directory is probed independently against all coverage
+        adapters.  The first adapter that matches a given package is used.
+        All per-package reports are merged into a single CoverageReport with
+        paths relative to the workspace root.  Packages are analysed in
+        parallel via ``asyncio.gather``.
+
+        Args:
+            project_root: Workspace root directory.
+            workspace: Detected workspace profile with package list.
+
+        Returns:
+            Merged CoverageReport, or None if no package produced data.
+        """
+
+        async def _run_package(
+            package: PackageInfo,
+        ) -> dict[str, FileCoverage]:
+            pkg_path = (project_root / package.path).resolve()
+            if not pkg_path.is_dir():
+                return {}
+
+            for adapter in self._coverage_adapters:
+                if adapter.detect(pkg_path):
+                    logger.info(
+                        "Running %s coverage in package %s (%s)",
+                        adapter.name,
+                        package.name,
+                        package.path,
+                    )
+                    try:
+                        pkg_report = await adapter.run_coverage(pkg_path)
+                        if pkg_report and pkg_report.files:
+                            result: dict[str, FileCoverage] = {}
+                            for fpath, fcov in pkg_report.files.items():
+                                norm = self._normalize_coverage_path(fpath, project_root)
+                                result[norm] = fcov
+                            logger.info(
+                                "Package %s: collected coverage for %d file(s)",
+                                package.name,
+                                len(pkg_report.files),
+                            )
+                            return result
+                    except Exception as exc:
+                        logger.warning(
+                            "Coverage for package %s (%s) failed: %s",
+                            package.name,
+                            adapter.name,
+                            exc,
+                        )
+                        reporter.print_warning(
+                            f"Coverage failed for package '{package.name}': {exc}"
+                        )
+                    # Use first matching adapter per package, then move on
+                    break
+            return {}
+
+        results = await asyncio.gather(
+            *[_run_package(pkg) for pkg in workspace.packages],
+            return_exceptions=True,
+        )
+
+        merged = CoverageReport()
+        for res in results:
+            if isinstance(res, BaseException):
+                logger.warning("Monorepo package coverage failed: %s", res)
+                continue
+            merged.files.update(res)
+
+        if not merged.files:
+            logger.warning("No coverage data collected from any monorepo package")
+            return None
+
+        return merged
+
+    @staticmethod
+    def _normalize_coverage_path(file_path: str, project_root: Path) -> str:
+        """Normalize a coverage file path to be relative to the project root.
+
+        Coverage tools may report absolute paths or paths relative to a
+        sub-package.  This converts them to a consistent relative path from
+        the workspace root so that ``_analyze_file_gaps`` can resolve them.
+
+        Args:
+            file_path: Path as reported by the coverage tool.
+            project_root: Workspace root directory.
+
+        Returns:
+            Relative path string from the project root.
+        """
+        p = Path(file_path)
+        if p.is_absolute():
+            try:
+                return str(p.relative_to(project_root))
+            except ValueError:
+                return file_path
+        return file_path
 
     def _analyze_gaps(
         self, coverage_report: CoverageReport, target_coverage: float
@@ -350,6 +487,128 @@ class CoverageAnalyzer(BaseAgent):
 
         return gap_report
 
+    @staticmethod
+    def _collect_source_and_test_files(
+        project_root: Path,
+    ) -> tuple[list[Path], set[str]]:
+        """Walk *project_root* and separate source files from test files.
+
+        Returns:
+            A tuple of (source_files, test_file_stems).
+        """
+        source_extensions = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".cs"}
+        test_indicators = {"test_", "_test", ".test.", ".spec.", "tests/", "__tests__/"}
+        exclude_dirs = {
+            "node_modules",
+            ".venv",
+            "venv",
+            ".git",
+            "build",
+            "dist",
+            "__pycache__",
+            ".pytest_cache",
+            "coverage",
+            ".coverage",
+            "site-packages",
+            ".next",
+            "target",
+            ".nit",
+        }
+
+        source_files: list[Path] = []
+        test_file_stems: set[str] = set()
+
+        for fpath in project_root.rglob("*"):
+            if not fpath.is_file():
+                continue
+            if fpath.suffix not in source_extensions:
+                continue
+            rel = fpath.relative_to(project_root)
+            if any(part in exclude_dirs for part in rel.parts):
+                continue
+
+            is_test = any(ind in fpath.name for ind in test_indicators) or any(
+                ind.strip("/") in rel.parts for ind in test_indicators if "/" in ind
+            )
+            if is_test:
+                stem = fpath.stem
+                for prefix in ("test_",):
+                    if stem.startswith(prefix):
+                        stem = stem[len(prefix) :]
+                for suffix in ("_test", ".test", ".spec"):
+                    if stem.endswith(suffix):
+                        stem = stem[: -len(suffix)]
+                test_file_stems.add(stem)
+            else:
+                source_files.append(fpath)
+
+        return source_files, test_file_stems
+
+    def _scan_for_untested_sources(
+        self, project_root: Path, target_coverage: float
+    ) -> CoverageGapReport:
+        """Fallback gap detection when no coverage data is available.
+
+        Walks the project tree to find source files, parses them with
+        tree-sitter, and checks whether a corresponding test file exists.
+        Every public function in a file that has no matching test file is
+        reported as a gap with zero coverage.
+
+        Args:
+            project_root: Root directory of the project.
+            target_coverage: Target coverage percentage.
+
+        Returns:
+            CoverageGapReport built from static source analysis.
+        """
+        gap_report = CoverageGapReport(
+            overall_coverage=0.0,
+            target_coverage=target_coverage,
+        )
+
+        source_files, test_file_stems = self._collect_source_and_test_files(project_root)
+
+        for src in source_files:
+            stem = src.stem
+            has_test = stem in test_file_stems
+            rel_path = str(src.relative_to(project_root))
+
+            if not has_test:
+                gap_report.untested_files.append(rel_path)
+
+            try:
+                language = detect_language(src)
+                if not language:
+                    continue
+                parse_result = extract_from_file(str(src))
+                for func_info in parse_result.functions:
+                    is_public = self._is_public_function(func_info)
+                    if not is_public:
+                        continue
+                    complexity = self._estimate_complexity(func_info)
+                    priority = self._calculate_priority(complexity, 0.0, is_public=is_public)
+                    gap_report.function_gaps.append(
+                        FunctionGap(
+                            file_path=rel_path,
+                            function_name=func_info.name,
+                            line_number=func_info.start_line,
+                            end_line=func_info.end_line,
+                            coverage_percentage=0.0,
+                            complexity=complexity,
+                            is_public=is_public,
+                            priority=priority,
+                        )
+                    )
+            except Exception as exc:
+                logger.debug("Failed to parse %s for fallback analysis: %s", src, exc)
+
+        logger.info(
+            "Source-file scan found %d untested file(s), %d function gap(s)",
+            len(gap_report.untested_files),
+            len(gap_report.function_gaps),
+        )
+        return gap_report
+
     def _analyze_file_gaps(self, file_path: str, file_coverage: FileCoverage) -> list[FunctionGap]:
         """Analyze a single file for function-level coverage gaps.
 
@@ -379,7 +638,12 @@ class CoverageAnalyzer(BaseAgent):
 
             # Analyze each function
             for func_info in parse_result.functions:
-                gap = self._analyze_function(file_path, func_info, coverage_map.get(func_info.name))
+                gap = self._analyze_function(
+                    file_path,
+                    func_info,
+                    coverage_map.get(func_info.name),
+                    file_coverage,
+                )
                 if gap:
                     gaps.append(gap)
 
@@ -393,6 +657,7 @@ class CoverageAnalyzer(BaseAgent):
         file_path: str,
         func_info: FunctionInfo,
         coverage_data: FunctionCoverage | None,
+        file_coverage: FileCoverage | None = None,
     ) -> FunctionGap | None:
         """Analyze a single function for coverage gaps.
 
@@ -400,12 +665,33 @@ class CoverageAnalyzer(BaseAgent):
             file_path: Path to the source file.
             func_info: Function information from tree-sitter.
             coverage_data: Coverage data for this function (or None if uncovered).
+            file_coverage: Full file coverage data with line-level info.
 
         Returns:
             FunctionGap if the function needs testing, else None.
         """
-        # Calculate coverage percentage
-        coverage_pct = 100.0 if coverage_data and coverage_data.is_covered else 0.0
+        # Calculate coverage percentage using line-level data when available
+        coverage_pct: float
+        if file_coverage and file_coverage.lines and func_info.start_line and func_info.end_line:
+            # Compute actual line coverage for this function's range
+            func_lines = {
+                lc.line_number
+                for lc in file_coverage.lines
+                if func_info.start_line <= lc.line_number <= func_info.end_line
+            }
+            covered_lines = {
+                lc.line_number
+                for lc in file_coverage.lines
+                if func_info.start_line <= lc.line_number <= func_info.end_line and lc.is_covered
+            }
+            if func_lines:
+                coverage_pct = (len(covered_lines) / len(func_lines)) * 100.0
+            else:
+                # No line data in this range — fall back to function-level
+                coverage_pct = 100.0 if coverage_data and coverage_data.is_covered else 0.0
+        else:
+            # No line-level data — fall back to binary
+            coverage_pct = 100.0 if coverage_data and coverage_data.is_covered else 0.0
 
         # Skip if function is well-tested
         if coverage_pct >= self._undertested_threshold:

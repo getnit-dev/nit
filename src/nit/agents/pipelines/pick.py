@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import subprocess
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -23,8 +25,9 @@ from nit.agents.analyzers.integration_deps import detect_integration_dependencie
 from nit.agents.analyzers.pattern import PatternAnalysisTask, PatternAnalyzer
 from nit.agents.analyzers.risk import RiskAnalysisTask, RiskAnalyzer
 from nit.agents.analyzers.route_discovery import RouteDiscoveryAgent
+from nit.agents.analyzers.security import SecurityAnalysisTask, SecurityAnalyzer
 from nit.agents.analyzers.semantic_gap import SemanticGapDetector, SemanticGapTask
-from nit.agents.base import TaskStatus
+from nit.agents.base import TaskInput, TaskStatus
 from nit.agents.debuggers import (
     BugVerificationTask,
     BugVerifier,
@@ -38,7 +41,10 @@ from nit.agents.debuggers import (
     RootCauseAnalyzer,
     VerificationResult,
 )
+from nit.agents.detectors.dependency import detect_dependencies
 from nit.agents.detectors.framework import detect_frameworks
+from nit.agents.detectors.infra import detect_infra
+from nit.agents.detectors.llm_usage import LLMUsageDetector, LLMUsageProfile
 from nit.agents.detectors.stack import detect_languages
 from nit.agents.detectors.workspace import detect_workspace
 from nit.agents.reporters import GenerationSummary, GitHubPRReporter
@@ -50,8 +56,15 @@ from nit.llm.config import load_llm_config
 from nit.llm.factory import create_engine
 from nit.llm.usage_callback import get_session_usage_stats
 from nit.memory.analytics_collector import get_analytics_collector
+from nit.models.analytics import BugSnapshot, TestExecutionSnapshot
 from nit.models.profile import ProjectProfile
 from nit.models.store import is_profile_stale, load_profile, save_profile
+from nit.sharding.parallel_runner import ParallelRunConfig, run_tests_parallel
+from nit.telemetry.sentry_integration import (
+    record_metric_count,
+    record_metric_distribution,
+    start_span,
+)
 from nit.utils.ci_context import CIContext, detect_ci_context, should_create_pr
 from nit.utils.git import get_default_branch
 
@@ -188,6 +201,9 @@ class PickPipelineResult:
     security_report: SecurityReport | None = None
     """Security vulnerability findings."""
 
+    llm_usage_profile: LLMUsageProfile | None = None
+    """Detected LLM/AI SDK usage locations."""
+
     success: bool = True
     errors: list[str] = field(default_factory=list)
 
@@ -227,6 +243,9 @@ class PickPipeline:
         # Initialize analytics collector for local tracking
         self._collector = get_analytics_collector(config.project_root)
 
+        # Populated during profile loading when LLM SDK usage is detected
+        self._llm_usage_profile: LLMUsageProfile | None = None
+
     def _token_budget_exceeded(self) -> bool:
         """Check if the session token budget has been exceeded."""
         if self.config.token_budget <= 0:
@@ -252,12 +271,6 @@ class PickPipeline:
         Returns:
             Pipeline execution result.
         """
-        from nit.telemetry.sentry_integration import (
-            record_metric_count,
-            record_metric_distribution,
-            start_span,
-        )
-
         result = PickPipelineResult()
         tracker = _StepTracker(_TOTAL_STEPS, ci_mode=self.config.ci_mode)
         pipeline_start = time.monotonic()
@@ -268,64 +281,7 @@ class PickPipeline:
         record_metric_count("nit.command.invoked", command="pick")
 
         try:
-            # Step 1: Load project profile
-            tracker.step("Loading project profile")
-            with start_span(op="step.profile", description="Load project profile"):
-                profile = await self._load_profile()
-
-            # Step 2: Load test framework adapters
-            tracker.step("Loading test framework adapters")
-            with start_span(op="step.adapters", description="Load test adapters"):
-                adapters = self._get_test_adapters(profile)
-                primary_adapter = adapters[0]
-                record_metric_count("nit.framework.detected", framework=primary_adapter.name)
-
-            # Check prerequisites (part of step 2)
-            prereqs_ok = await check_and_install_prerequisites(
-                primary_adapter, self.config.project_root, ci_mode=self.config.ci_mode
-            )
-            if not prereqs_ok:
-                error_msg = "Prerequisites not satisfied. Please install required dependencies."
-                result.success = False
-                result.errors.append(error_msg)
-                if not self.config.ci_mode:
-                    reporter.print_error(error_msg)
-                return result
-
-            # Step 3: Run tests and analyze coverage
-            tracker.step("Running tests and analyzing coverage")
-            with start_span(op="step.tests", description="Run tests"):
-                test_result = await self._run_tests(primary_adapter)
-                await self._collect_test_metrics(test_result, result)
-
-            record_metric_count("nit.tests.passed", value=result.tests_passed)
-            record_metric_count("nit.tests.failed", value=result.tests_failed)
-
-            # Step 4: Analyze test failures for bugs
-            failed_count = result.tests_failed + result.tests_errors
-            tracker.step(f"Analyzing {failed_count} test failures for bugs")
-            with start_span(op="step.bugs", description="Analyze bugs"):
-                bugs = await self._analyze_bugs(test_result)
-                result.bugs_found = bugs
-
-            record_metric_count("nit.bugs.found", value=len(bugs))
-
-            # Steps 5-6: Deep analysis (code patterns, risk, semantic gaps)
-            with start_span(op="step.analysis", description="Deep analysis"):
-                await self._run_deep_analysis_steps(tracker, profile, result)
-
-            # Steps 7-8: Fix generation and application
-            with start_span(op="step.fixes", description="Fix generation"):
-                await self._run_fix_steps(tracker, bugs, primary_adapter, result)
-
-            # Step 9: Post-loop actions (issues, PRs, commits)
-            if self._should_run_post_loop(result):
-                tracker.step("Creating GitHub pull request or commit")
-                with start_span(op="step.report", description="Post-loop actions"):
-                    await self._post_loop(result)
-            else:
-                tracker.skip("Creating PR/commit")
-
+            await self._run_pipeline_steps(result, tracker, start_span, record_metric_count)
         except Exception as e:
             logger.exception("Pick pipeline failed: %s", e)
             result.success = False
@@ -335,6 +291,73 @@ class PickPipeline:
         record_metric_distribution("nit.pipeline.duration_ms", duration_ms, unit="millisecond")
 
         return result
+
+    async def _run_pipeline_steps(
+        self,
+        result: PickPipelineResult,
+        tracker: _StepTracker,
+        start_span: Any,
+        record_metric_count: Any,
+    ) -> None:
+        """Execute the core pipeline steps (extracted to stay within statement limits)."""
+        # Step 1: Load project profile
+        tracker.step("Loading project profile")
+        with start_span(op="step.profile", description="Load project profile"):
+            profile = await self._load_profile()
+            result.llm_usage_profile = self._llm_usage_profile
+
+        # Step 2: Load test framework adapters
+        tracker.step("Loading test framework adapters")
+        with start_span(op="step.adapters", description="Load test adapters"):
+            adapters = self._get_test_adapters(profile)
+            primary_adapter = adapters[0]
+            record_metric_count("nit.framework.detected", framework=primary_adapter.name)
+
+        # Check prerequisites (part of step 2)
+        prereqs_ok = await check_and_install_prerequisites(
+            primary_adapter, self.config.project_root, ci_mode=self.config.ci_mode
+        )
+        if not prereqs_ok:
+            error_msg = "Prerequisites not satisfied. Please install required dependencies."
+            result.success = False
+            result.errors.append(error_msg)
+            if not self.config.ci_mode:
+                reporter.print_error(error_msg)
+            return
+
+        # Step 3: Run tests and analyze coverage
+        tracker.step("Running tests and analyzing coverage")
+        with start_span(op="step.tests", description="Run tests"):
+            test_result = await self._run_tests(primary_adapter)
+            await self._collect_test_metrics(test_result, result)
+
+        record_metric_count("nit.tests.passed", value=result.tests_passed)
+        record_metric_count("nit.tests.failed", value=result.tests_failed)
+
+        # Step 4: Analyze test failures for bugs
+        failed_count = result.tests_failed + result.tests_errors
+        tracker.step(f"Analyzing {failed_count} test failures for bugs")
+        with start_span(op="step.bugs", description="Analyze bugs"):
+            bugs = await self._analyze_bugs(test_result)
+            result.bugs_found = bugs
+
+        record_metric_count("nit.bugs.found", value=len(bugs))
+
+        # Steps 5-6: Deep analysis (code patterns, risk, semantic gaps)
+        with start_span(op="step.analysis", description="Deep analysis"):
+            await self._run_deep_analysis_steps(tracker, profile, result)
+
+        # Steps 7-8: Fix generation and application
+        with start_span(op="step.fixes", description="Fix generation"):
+            await self._run_fix_steps(tracker, bugs, primary_adapter, result)
+
+        # Step 9: Post-loop actions (issues, PRs, commits)
+        if self._should_run_post_loop(result):
+            tracker.step("Creating GitHub pull request or commit")
+            with start_span(op="step.report", description="Post-loop actions"):
+                await self._post_loop(result)
+        else:
+            tracker.skip("Creating PR/commit")
 
     # ------------------------------------------------------------------
     # Step groups extracted from run()
@@ -506,6 +529,25 @@ class PickPipeline:
             lang_profile = detect_languages(root)
             fw_profile = detect_frameworks(root)
             ws_profile = detect_workspace(root)
+            infra_profile = detect_infra(root)
+            dep_profile = detect_dependencies(root, workspace=ws_profile)
+
+            # Detect LLM/AI SDK usage for drift test candidates
+            try:
+                llm_detector = LLMUsageDetector()
+                llm_task = TaskInput(task_type="detect_llm_usage", target=root)
+                llm_output = await llm_detector.run(llm_task)
+                if llm_output.status == TaskStatus.COMPLETED:
+                    llm_profile = llm_output.result.get("profile")
+                    if isinstance(llm_profile, LLMUsageProfile) and llm_profile.total_usages:
+                        self._llm_usage_profile = llm_profile
+                        logger.info(
+                            "LLM usage detection: %d usage(s), providers: %s",
+                            llm_profile.total_usages,
+                            ", ".join(sorted(llm_profile.providers)),
+                        )
+            except Exception as exc:
+                logger.debug("LLM usage detection failed: %s", exc)
 
             profile = ProjectProfile(
                 root=str(self.config.project_root.resolve()),
@@ -513,6 +555,8 @@ class PickPipeline:
                 frameworks=fw_profile.frameworks,
                 packages=ws_profile.packages,
                 workspace_tool=ws_profile.tool,
+                infra_profile=infra_profile,
+                dependency_profile=dep_profile,
             )
             save_profile(profile)
 
@@ -552,8 +596,6 @@ class PickPipeline:
 
     async def _run_tests(self, adapter: TestFrameworkAdapter) -> RunResult:
         """Run tests and capture results, using parallel execution when beneficial."""
-        from nit.sharding.parallel_runner import ParallelRunConfig, run_tests_parallel
-
         t0 = time.monotonic()
         parallel_config = ParallelRunConfig(timeout=120.0)
 
@@ -578,11 +620,14 @@ class PickPipeline:
 
         # Record test execution to analytics
         self._collector.record_test_execution(
-            total=result.total,
-            passed=result.passed,
-            failed=result.failed,
-            skipped=result.skipped,
-            duration_ms=result.duration_ms if result.duration_ms > 0 else None,
+            TestExecutionSnapshot(
+                timestamp=datetime.now(UTC).isoformat(),
+                total_tests=result.total,
+                passed_tests=result.passed,
+                failed_tests=result.failed,
+                skipped_tests=result.skipped,
+                total_duration_ms=result.duration_ms if result.duration_ms > 0 else None,
+            ),
         )
 
         return result
@@ -628,11 +673,12 @@ class PickPipeline:
         analyzer: BugAnalyzer,
         failed_tests: list[CaseResult],
     ) -> list[BugReport]:
-        """Run bug analysis on failed tests and collect reports."""
-        bugs: list[BugReport] = []
+        """Run bug analysis on failed tests and collect reports (parallelized)."""
+        ci_mode = self.config.ci_mode
+        collector = self._collector
 
-        for i, test_case in enumerate(failed_tests, 1):
-            if not self.config.ci_mode:
+        async def _analyze_one(i: int, test_case: CaseResult) -> BugReport | None:
+            if not ci_mode:
                 short_name = test_case.name[:60]
                 reporter.print_analysis_progress(
                     i, len(failed_tests), f"Analyzing [bold]{short_name}[/bold]"
@@ -649,23 +695,38 @@ class PickPipeline:
                 result = await analyzer.run(task)
 
                 if result.status == TaskStatus.COMPLETED and result.result.get("is_code_bug"):
-                    bug_report = result.result.get("bug_report")
-                    if bug_report:
-                        bugs.append(bug_report)
-                        if not self.config.ci_mode:
-                            reporter.print_warning(f"    Bug detected: {bug_report.title}")
+                    raw_report = result.result.get("bug_report")
+                    if isinstance(raw_report, BugReport):
+                        if not ci_mode:
+                            reporter.print_warning(f"    Bug detected: {raw_report.title}")
 
-                        self._collector.record_bug(
-                            bug_type=bug_report.bug_type.value,
-                            severity=bug_report.severity.value,
-                            status="discovered",
-                            file_path=bug_report.location.file_path,
-                            line_number=bug_report.location.line_number,
-                            title=bug_report.title,
+                        collector.record_bug(
+                            BugSnapshot(
+                                timestamp=datetime.now(UTC).isoformat(),
+                                bug_type=raw_report.bug_type.value,
+                                severity=raw_report.severity.value,
+                                status="discovered",
+                                file_path=raw_report.location.file_path,
+                                line_number=raw_report.location.line_number,
+                                title=raw_report.title,
+                            ),
                         )
+                        return raw_report
 
             except Exception as e:
                 logger.warning("Bug analysis failed for test %s: %s", test_case.name, e)
+
+            return None
+
+        tasks = [_analyze_one(i, tc) for i, tc in enumerate(failed_tests, 1)]
+        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+
+        bugs: list[BugReport] = []
+        for item in outcomes:
+            if isinstance(item, BaseException):
+                logger.warning("Bug analysis raised exception: %s", item)
+            elif item is not None:
+                bugs.append(item)
 
         return bugs
 
@@ -763,26 +824,39 @@ class PickPipeline:
         gap_report: CoverageGapReport,
         result: PickPipelineResult,
     ) -> None:
-        """Run CodeAnalyzer on files from gap report."""
+        """Run CodeAnalyzer on files from gap report (parallelized)."""
         file_paths = {fg.file_path for fg in gap_report.function_gaps}
         file_paths.update(gap_report.untested_files)
 
         code_analyzer = CodeAnalyzer(project_root=self.config.project_root)
-        for file_path in file_paths:
-            full_path = Path(file_path)
+        ci_mode = self.config.ci_mode
+
+        async def _analyze_one(fp: str) -> tuple[str, Any]:
+            full_path = Path(fp)
             if not full_path.is_absolute():
-                full_path = self.config.project_root / file_path
+                full_path = self.config.project_root / fp
             if not full_path.exists():
-                continue
+                return fp, None
             try:
                 task = CodeAnalysisTask(file_path=str(full_path))
                 output = await code_analyzer.run(task)
                 if output.status == TaskStatus.COMPLETED:
-                    code_map = output.result.get("code_map")
-                    if code_map:
-                        result.code_maps[file_path] = code_map
+                    return fp, output.result.get("code_map")
             except Exception as exc:
-                logger.debug("Code analysis failed for %s: %s", file_path, exc)
+                logger.warning("Code analysis failed for %s: %s", fp, exc)
+                if not ci_mode:
+                    reporter.print_warning(f"Could not analyze {fp}: {exc}")
+            return fp, None
+
+        tasks = [_analyze_one(fp) for fp in file_paths]
+        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+        for item in outcomes:
+            if isinstance(item, BaseException):
+                logger.warning("Code analysis raised exception: %s", item)
+                continue
+            fp, code_map = item
+            if code_map:
+                result.code_maps[fp] = code_map
 
     async def _analyze_patterns(self, profile: ProjectProfile) -> ConventionProfile | None:
         """Run PatternAnalyzer for project-wide conventions."""
@@ -844,11 +918,6 @@ class PickPipeline:
 
     async def _run_security_analysis(self, result: PickPipelineResult) -> None:
         """Run SecurityAnalyzer on code maps."""
-        from nit.agents.analyzers.security import (
-            SecurityAnalysisTask,
-            SecurityAnalyzer,
-        )
-
         if not result.code_maps:
             return
 
@@ -978,11 +1047,11 @@ class PickPipeline:
         adapter: TestFrameworkAdapter,
         llm_engine: Any,  # LLMEngine (Any used due to missing py.typed)
     ) -> list[tuple[str, GeneratedFix]]:
-        """Generate and verify fixes for detected bugs."""
+        """Generate and verify fixes for detected bugs (parallelized)."""
         t0 = time.monotonic()
-        fixes: list[tuple[str, GeneratedFix]] = []
+        ci_mode = self.config.ci_mode
 
-        # Create fix pipeline agents once
+        # Create fix pipeline agents once (shared across all tasks)
         agents = FixPipelineAgents(
             verifier=BugVerifier(llm_engine, self.config.project_root),
             root_cause_analyzer=RootCauseAnalyzer(llm_engine, self.config.project_root),
@@ -990,24 +1059,36 @@ class PickPipeline:
             fix_verifier=FixVerifier(self.config.project_root),
         )
 
-        for i, bug_report in enumerate(bugs, 1):
-            if not self.config.ci_mode:
+        async def _fix_one(
+            i: int,
+            bug_report: BugReport,
+        ) -> tuple[str, GeneratedFix] | None:
+            if not ci_mode:
                 reporter.print_analysis_progress(
                     i, len(bugs), f"Fixing [bold]{bug_report.title[:50]}[/bold]"
                 )
-
             try:
                 fix = await self._generate_single_fix(bug_report, adapter, agents)
                 if fix:
-                    fixes.append((bug_report.location.file_path, fix))
-                    if not self.config.ci_mode:
+                    if not ci_mode:
                         reporter.print_success(f"    Fix verified for: {bug_report.title}")
-
+                    return (bug_report.location.file_path, fix)
             except Exception as e:
                 logger.exception("Fix generation failed for bug %s: %s", bug_report.title, e)
+            return None
+
+        tasks = [_fix_one(i, br) for i, br in enumerate(bugs, 1)]
+        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+
+        fixes: list[tuple[str, GeneratedFix]] = []
+        for item in outcomes:
+            if isinstance(item, BaseException):
+                logger.warning("Fix generation raised exception: %s", item)
+            elif item is not None:
+                fixes.append(item)
 
         elapsed = time.monotonic() - t0
-        if not self.config.ci_mode:
+        if not ci_mode:
             reporter.print_step_done(f"Generated {len(fixes)} verified fixes", elapsed)
 
         return fixes
@@ -1192,7 +1273,7 @@ class PickPipeline:
     def _create_llm_engine(self) -> Any:  # LLMEngine (Any used due to missing py.typed)
         """Create LLM engine from config."""
         llm_config = load_llm_config(str(self.config.project_root))
-        return create_engine(llm_config)
+        return create_engine(llm_config, project_root=self.config.project_root)
 
     def _apply_fixes(self, fixes: list[tuple[str, GeneratedFix]]) -> list[str]:
         """Apply verified fixes to source files."""

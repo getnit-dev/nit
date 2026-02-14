@@ -31,6 +31,7 @@ def mock_llm_engine() -> MagicMock:
     """Create a mock LLM engine."""
     engine = MagicMock()
     engine.model_name = "gpt-4o"
+    engine.count_tokens = MagicMock(return_value=100)
 
     # Mock the generate method to return a test code response
     async def mock_generate(request: GenerationRequest) -> LLMResponse:

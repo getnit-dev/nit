@@ -27,7 +27,7 @@ def _resolve_env_vars(value: str) -> str:
 class LLMConfig:
     """Parsed LLM configuration from ``.nit.yml``."""
 
-    provider: str = "openai"
+    provider: str = ""
     """LLM provider name (``openai``, ``anthropic``, ``ollama``, etc.)."""
 
     model: str = ""
@@ -71,13 +71,10 @@ class LLMConfig:
     """Platform virtual key used for proxy mode and usage ingestion."""
 
     platform_mode: str = ""
-    """Platform integration mode: ``platform`` | ``byok`` | ``disabled``."""
-
-    platform_user_id: str = ""
-    """Optional platform user ID for usage metadata."""
+    """Platform integration mode: ``byok`` | ``disabled``."""
 
     platform_project_id: str = ""
-    """Optional platform project ID for usage metadata/report uploads."""
+    """Optional platform project ID for memory sync."""
 
     platform_key_hash: str = ""
     """Optional key hash override for usage metadata."""
@@ -95,6 +92,8 @@ class LLMConfig:
     @property
     def is_configured(self) -> bool:
         """Return ``True`` when enough info is present for generation."""
+        if not self.provider:
+            return False
         if self.mode == "ollama":
             return bool(self.model)
         if self.mode in ("cli", "custom"):
@@ -130,7 +129,7 @@ def load_llm_config(root: str | Path) -> LLMConfig:
 
 def _build_config(raw: dict[str, Any], platform_raw: dict[str, Any]) -> LLMConfig:
     """Build an ``LLMConfig`` from a raw dict, applying env var resolution."""
-    provider = str(raw.get("provider", os.environ.get("NIT_LLM_PROVIDER", "openai")))
+    provider = str(raw.get("provider", os.environ.get("NIT_LLM_PROVIDER", "")))
     model = str(raw.get("model", os.environ.get("NIT_LLM_MODEL", "")))
     api_key = str(raw.get("api_key", os.environ.get("NIT_LLM_API_KEY", "")))
     base_url = str(raw.get("base_url", os.environ.get("NIT_LLM_BASE_URL", "")))
@@ -139,7 +138,6 @@ def _build_config(raw: dict[str, Any], platform_raw: dict[str, Any]) -> LLMConfi
     platform_url = str(platform_raw.get("url", os.environ.get("NIT_PLATFORM_URL", "")))
     platform_api_key = str(platform_raw.get("api_key", os.environ.get("NIT_PLATFORM_API_KEY", "")))
     platform_mode = str(platform_raw.get("mode", os.environ.get("NIT_PLATFORM_MODE", "")))
-    platform_user_id = str(platform_raw.get("user_id", os.environ.get("NIT_PLATFORM_USER_ID", "")))
     platform_project_id = str(
         platform_raw.get("project_id", os.environ.get("NIT_PLATFORM_PROJECT_ID", ""))
     )
@@ -152,7 +150,6 @@ def _build_config(raw: dict[str, Any], platform_raw: dict[str, Any]) -> LLMConfi
     base_url = _resolve_env_vars(base_url)
     platform_url = _resolve_env_vars(platform_url)
     platform_api_key = _resolve_env_vars(platform_api_key)
-    platform_user_id = _resolve_env_vars(platform_user_id)
     platform_project_id = _resolve_env_vars(platform_project_id)
     platform_key_hash = _resolve_env_vars(platform_key_hash)
 
@@ -180,7 +177,6 @@ def _build_config(raw: dict[str, Any], platform_raw: dict[str, Any]) -> LLMConfi
         platform_url=platform_url,
         platform_api_key=platform_api_key,
         platform_mode=platform_mode,
-        platform_user_id=platform_user_id,
         platform_project_id=platform_project_id,
         platform_key_hash=platform_key_hash,
     )

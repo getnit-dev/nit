@@ -113,11 +113,11 @@ class GcovAdapter(CoverageAdapter):
         return False
 
     def _detect_gcov_or_lcov_files(self, project_path: Path) -> bool:
-        if list(project_path.rglob("*.gcno")) or list(project_path.rglob("*.gcda")):
+        if next(project_path.rglob("*.gcno"), None) or next(project_path.rglob("*.gcda"), None):
             return True
         for pattern in _COVERAGE_FILE_GLOBS:
             if pattern.startswith("*"):
-                if list(project_path.rglob(pattern)):
+                if next(project_path.rglob(pattern), None):
                     return True
             elif (project_path / pattern).exists():
                 return True
@@ -127,10 +127,10 @@ class GcovAdapter(CoverageAdapter):
         for name in _LLVM_COV_JSON_NAMES:
             if (project_path / name).exists():
                 return True
-        for path in project_path.rglob("*.json"):
-            if path.name.endswith("coverage.json") or "llvm-cov" in path.name:
-                return True
-        return False
+        return any(
+            path.name.endswith("coverage.json") or "llvm-cov" in path.name
+            for path in project_path.rglob("*.json")
+        )
 
     def detect(self, project_path: Path) -> bool:
         """Return True if gcov/lcov or llvm-cov coverage is available."""
@@ -199,9 +199,15 @@ class GcovAdapter(CoverageAdapter):
         profdata = next(project_path.rglob("*.profdata"), None)
         if not profdata:
             return CoverageReport()
-        # Need a binary; try common build dirs
-        for binary in project_path.rglob("*"):
-            if binary.is_file() and binary.suffix in ("", ".exe"):
+        # Search common build directories for binaries instead of scanning everything
+        build_dirs = ["build", "cmake-build-debug", "cmake-build-release", "out", "target", "bin"]
+        search_roots = [project_path / d for d in build_dirs if (project_path / d).is_dir()]
+        if not search_roots:
+            search_roots = [project_path]
+        for search_root in search_roots:
+            for binary in search_root.rglob("*"):
+                if not binary.is_file() or binary.suffix not in ("", ".exe"):
+                    continue
                 try:
                     result = await run_subprocess(
                         [
@@ -214,7 +220,6 @@ class GcovAdapter(CoverageAdapter):
                         timeout=timeout,
                     )
                     if result.success and result.stdout.strip():
-                        # llvm-cov export --format=text is actually JSON
                         return self._parse_llvm_cov_json_string(result.stdout)
                 except (FileNotFoundError, ValueError, json.JSONDecodeError):
                     continue

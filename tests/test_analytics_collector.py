@@ -7,6 +7,12 @@ from tempfile import TemporaryDirectory
 import pytest
 
 from nit.memory.analytics_collector import AnalyticsCollector, reset_analytics_collector
+from nit.models.analytics import (
+    BugSnapshot,
+    DriftSnapshot,
+    LLMUsage,
+    TestExecutionSnapshot,
+)
 from nit.models.coverage import CoverageReport, PackageCoverage
 
 
@@ -33,12 +39,15 @@ def test_record_llm_usage() -> None:
         collector = AnalyticsCollector(project_root)
 
         collector.record_llm_usage(
-            provider="openai",
-            model="gpt-4",
-            prompt_tokens=100,
-            completion_tokens=50,
-            cost_usd=0.01,
-            duration_ms=500.0,
+            LLMUsage(
+                provider="openai",
+                model="gpt-4",
+                prompt_tokens=100,
+                completion_tokens=50,
+                total_tokens=150,
+                cost_usd=0.01,
+                duration_ms=500.0,
+            ),
         )
 
         # Verify event was written
@@ -83,11 +92,14 @@ def test_record_test_execution() -> None:
         collector = AnalyticsCollector(project_root)
 
         collector.record_test_execution(
-            total=100,
-            passed=95,
-            failed=5,
-            skipped=0,
-            duration_ms=5000.0,
+            TestExecutionSnapshot(
+                timestamp="2024-01-01T00:00:00+00:00",
+                total_tests=100,
+                passed_tests=95,
+                failed_tests=5,
+                skipped_tests=0,
+                total_duration_ms=5000.0,
+            ),
         )
 
         # Verify event was written
@@ -104,12 +116,15 @@ def test_record_bug() -> None:
         collector = AnalyticsCollector(project_root)
 
         collector.record_bug(
-            bug_type="null_dereference",
-            severity="high",
-            status="discovered",
-            file_path="src/test.py",
-            line_number=42,
-            title="Null pointer dereference",
+            BugSnapshot(
+                timestamp="2024-01-01T00:00:00+00:00",
+                bug_type="null_dereference",
+                severity="high",
+                status="discovered",
+                file_path="src/test.py",
+                line_number=42,
+                title="Null pointer dereference",
+            ),
         )
 
         # Verify event was written
@@ -127,11 +142,14 @@ def test_record_drift_test() -> None:
         collector = AnalyticsCollector(project_root)
 
         collector.record_drift_test(
-            test_id="test_1",
-            test_name="Prompt consistency test",
-            similarity_score=0.95,
-            passed=True,
-            drift_detected=False,
+            DriftSnapshot(
+                timestamp="2024-01-01T00:00:00+00:00",
+                test_id="test_1",
+                test_name="Prompt consistency test",
+                similarity_score=0.95,
+                passed=True,
+                drift_detected=False,
+            ),
         )
 
         # Verify event was written

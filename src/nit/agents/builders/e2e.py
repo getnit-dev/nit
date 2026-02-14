@@ -120,6 +120,7 @@ class E2EBuilder(BaseAgent):
         self._context_assembler = ContextAssembler(
             root=project_root,
             max_context_tokens=max_context,
+            token_counter=llm_engine.count_tokens,
         )
         self._registry = get_registry()
         self._enable_memory = bool(cfg.get("enable_memory", True))
@@ -208,7 +209,15 @@ class E2EBuilder(BaseAgent):
             )
 
             # Step 4: Call LLM to generate test code
-            request = GenerationRequest(messages=rendered_prompt.messages)
+            request = GenerationRequest(
+                messages=rendered_prompt.messages,
+                metadata={
+                    "nit_source_file": task.route_path,
+                    "nit_template_name": prompt_template.name,
+                    "nit_builder_name": self.name,
+                    "nit_framework": "playwright",
+                },
+            )
             response = await self._llm.generate(request)
             test_code = response.text.strip()
 

@@ -63,17 +63,10 @@ def test_init_sentry_valid_config_calls_sdk() -> None:
     mock_logging_integration = MagicMock()
 
     with (
-        patch.dict(
-            "sys.modules",
-            {
-                "sentry_sdk": mock_sdk,
-                "sentry_sdk.integrations": MagicMock(),
-                "sentry_sdk.integrations.logging": MagicMock(
-                    LoggingIntegration=mock_logging_integration
-                ),
-            },
-        ),
-        patch("nit.utils.ci_context.detect_ci_context") as mock_ci,
+        patch.object(sentry_integration, "sentry_sdk", mock_sdk),
+        patch.object(sentry_integration, "_sentry_available", new=True),
+        patch.object(sentry_integration, "_LoggingIntegration", mock_logging_integration),
+        patch.object(sentry_integration, "detect_ci_context") as mock_ci,
     ):
         mock_ci.return_value = MagicMock(is_ci=False)
         sentry_integration.init_sentry(config)
@@ -98,15 +91,10 @@ def test_init_sentry_is_idempotent() -> None:
     mock_sdk = MagicMock()
 
     with (
-        patch.dict(
-            "sys.modules",
-            {
-                "sentry_sdk": mock_sdk,
-                "sentry_sdk.integrations": MagicMock(),
-                "sentry_sdk.integrations.logging": MagicMock(LoggingIntegration=MagicMock()),
-            },
-        ),
-        patch("nit.utils.ci_context.detect_ci_context") as mock_ci,
+        patch.object(sentry_integration, "sentry_sdk", mock_sdk),
+        patch.object(sentry_integration, "_sentry_available", new=True),
+        patch.object(sentry_integration, "_LoggingIntegration", MagicMock()),
+        patch.object(sentry_integration, "detect_ci_context") as mock_ci,
     ):
         mock_ci.return_value = MagicMock(is_ci=False)
         sentry_integration.init_sentry(config)
@@ -121,15 +109,10 @@ def test_init_sentry_ci_environment() -> None:
     mock_sdk = MagicMock()
 
     with (
-        patch.dict(
-            "sys.modules",
-            {
-                "sentry_sdk": mock_sdk,
-                "sentry_sdk.integrations": MagicMock(),
-                "sentry_sdk.integrations.logging": MagicMock(LoggingIntegration=MagicMock()),
-            },
-        ),
-        patch("nit.utils.ci_context.detect_ci_context") as mock_ci,
+        patch.object(sentry_integration, "sentry_sdk", mock_sdk),
+        patch.object(sentry_integration, "_sentry_available", new=True),
+        patch.object(sentry_integration, "_LoggingIntegration", MagicMock()),
+        patch.object(sentry_integration, "detect_ci_context") as mock_ci,
     ):
         mock_ci.return_value = MagicMock(is_ci=True)
         sentry_integration.init_sentry(config)
@@ -314,7 +297,7 @@ def test_start_span_calls_sdk_when_enabled() -> None:
     sentry_integration._initialized["value"] = True
     mock_sdk = MagicMock()
 
-    with patch.dict("sys.modules", {"sentry_sdk": mock_sdk}):
+    with patch.object(sentry_integration, "sentry_sdk", mock_sdk):
         sentry_integration.start_span(op="cli.command", description="nit pick")
 
     mock_sdk.start_span.assert_called_once_with(op="cli.command", description="nit pick")

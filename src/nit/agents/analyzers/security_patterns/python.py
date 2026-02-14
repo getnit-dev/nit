@@ -5,13 +5,13 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from nit.agents.analyzers.security import VulnerabilityType
 from nit.agents.analyzers.security_patterns.base import (
     DangerousSink,
     LanguageSecurityPatterns,
     PatternMatch,
     detect_hardcoded_secrets,
 )
+from nit.agents.analyzers.security_types import VulnerabilityType
 
 if TYPE_CHECKING:
     from nit.agents.analyzers.code import CodeMap

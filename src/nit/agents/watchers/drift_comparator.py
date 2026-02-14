@@ -17,7 +17,13 @@ from enum import Enum
 from typing import Any
 
 from jsonschema import ValidationError, validate
-from sentence_transformers import SentenceTransformer
+
+try:
+    from sentence_transformers import SentenceTransformer
+
+    _sentence_transformers_available = True
+except ImportError:
+    _sentence_transformers_available = False
 
 logger = logging.getLogger(__name__)
 
@@ -82,8 +88,16 @@ class DriftComparator:
 
         Returns:
             The loaded model.
+
+        Raises:
+            ImportError: If sentence-transformers is not installed.
         """
         if self._model is None:
+            if not _sentence_transformers_available:
+                raise ImportError(
+                    "sentence-transformers is required for semantic comparison. "
+                    "Install it with: pip install 'getnit[semantic]'"
+                )
             # Use a small, fast model that runs locally
             self._model = SentenceTransformer("all-MiniLM-L6-v2")
             logger.info("Loaded sentence-transformers model: all-MiniLM-L6-v2")

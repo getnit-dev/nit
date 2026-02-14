@@ -13,18 +13,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
+_T = TypeVar("_T")
 
 
 @dataclass(slots=True)
-class _Entry(Generic[T]):
+class _Entry(Generic[_T]):
     """A single cache entry with metadata."""
 
-    value: T
+    value: _T
     created_at: float
 
 
-class MemoryCache(Generic[T]):
+class MemoryCache(Generic[_T]):
     """In-memory LRU cache with optional TTL.
 
     Uses a plain ``dict`` (insertion-ordered since Python 3.7) for LRU
@@ -39,9 +39,9 @@ class MemoryCache(Generic[T]):
     def __init__(self, max_size: int = 256, ttl_seconds: float = 0.0) -> None:
         self._max_size = max_size
         self._ttl = ttl_seconds
-        self._store: dict[str, _Entry[T]] = {}
+        self._store: dict[str, _Entry[_T]] = {}
 
-    def get(self, key: str) -> T | None:
+    def get(self, key: str) -> _T | None:
         """Return cached value or ``None`` if missing/expired."""
         entry = self._store.get(key)
         if entry is None:
@@ -54,7 +54,7 @@ class MemoryCache(Generic[T]):
         self._store[key] = entry
         return entry.value
 
-    def put(self, key: str, value: T) -> None:
+    def put(self, key: str, value: _T) -> None:
         """Store a value, evicting the oldest entry if at capacity."""
         if key in self._store:
             del self._store[key]
@@ -78,7 +78,7 @@ class MemoryCache(Generic[T]):
         return len(self._store)
 
 
-class FileContentCache(Generic[T]):
+class FileContentCache(Generic[_T]):
     """Cache keyed by file path + modification time.
 
     Automatically invalidates when the underlying file has been modified
@@ -90,9 +90,9 @@ class FileContentCache(Generic[T]):
     """
 
     def __init__(self, max_size: int = 512) -> None:
-        self._cache: MemoryCache[tuple[float, T]] = MemoryCache(max_size=max_size)
+        self._cache: MemoryCache[tuple[float, _T]] = MemoryCache(max_size=max_size)
 
-    def get(self, file_path: Path) -> T | None:
+    def get(self, file_path: Path) -> _T | None:
         """Return cached value if the file has not changed since caching."""
         key = str(file_path)
         entry = self._cache.get(key)
@@ -109,7 +109,7 @@ class FileContentCache(Generic[T]):
             return None
         return value
 
-    def put(self, file_path: Path, value: T) -> None:
+    def put(self, file_path: Path, value: _T) -> None:
         """Store *value* alongside the file's current mtime."""
         try:
             mtime = file_path.stat().st_mtime

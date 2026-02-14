@@ -17,6 +17,7 @@ from nit.agents.watchers.drift_test import DriftTestExecutor, DriftTestParser, D
 from nit.llm.prompt_analysis import PromptOptimizer
 from nit.memory.analytics_collector import get_analytics_collector
 from nit.memory.drift_baselines import DriftBaselinesManager
+from nit.models.analytics import DriftSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -181,11 +182,14 @@ class DriftWatcher(BaseAgent):
                 try:
                     collector = get_analytics_collector(self._project_root)
                     collector.record_drift_test(
-                        test_id=result.test_id,
-                        test_name=result.test_name,
-                        similarity_score=result.similarity_score,
-                        passed=result.passed,
-                        drift_detected=not result.passed,
+                        DriftSnapshot(
+                            timestamp=datetime.now(UTC).isoformat(),
+                            test_id=result.test_id,
+                            test_name=result.test_name,
+                            similarity_score=result.similarity_score,
+                            passed=result.passed,
+                            drift_detected=not result.passed,
+                        ),
                     )
                 except Exception:
                     logger.exception("Failed to record drift test to analytics")

@@ -74,37 +74,33 @@ async def check_and_install_prerequisites(
             f"Missing required packages: {', '.join(prereq_check.missing_packages)}"
         )
 
-    # In CI mode, don't offer to install — just fail
-    if ci_mode:
-        return False
-
-    # If we can't auto-install, just fail
-    if not prereq_check.install_command or not prereq_check.package_manager:
+    # Can't auto-install: CI mode, no package manager, or only missing commands
+    pkg_mgr = prereq_check.package_manager
+    can_install = (
+        not ci_mode and prereq_check.install_command and pkg_mgr and prereq_check.missing_packages
+    )
+    if not can_install or pkg_mgr is None:
         return False
 
     # Offer to install missing packages
-    if prereq_check.missing_packages:
-        reporter.print_info(f"\nPackage manager detected: {prereq_check.package_manager.value}")
-        reporter.print_info(f"Install command: {prereq_check.install_command}")
+    reporter.print_info(f"\nPackage manager detected: {pkg_mgr.value}")
+    reporter.print_info(f"Install command: {prereq_check.install_command}")
 
-        if click.confirm("\nWould you like to install missing packages now?", default=True):
-            reporter.print_info("Installing packages...")
-            success = await install_packages(
-                packages=prereq_check.missing_packages,
-                package_manager=prereq_check.package_manager,
-                project_path=project_path,
-                dev=True,
-            )
-
-            if success:
-                reporter.print_success("Packages installed successfully!")
-                return True
-
-            reporter.print_error("Package installation failed.")
-            return False
-
+    if not click.confirm("\nWould you like to install missing packages now?", default=True):
         reporter.print_info("Skipping installation. Please install manually to continue.")
         return False
 
-    # If we only have missing commands, can't auto-fix
+    reporter.print_info("Installing packages...")
+    success = await install_packages(
+        packages=prereq_check.missing_packages,
+        package_manager=pkg_mgr,
+        project_path=project_path,
+        dev=True,
+    )
+
+    if success:
+        reporter.print_success("Packages installed successfully!")
+        return True
+
+    reporter.print_error("Package installation failed.")
     return False

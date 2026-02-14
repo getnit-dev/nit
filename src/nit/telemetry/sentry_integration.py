@@ -13,6 +13,18 @@ import re
 import threading
 from typing import TYPE_CHECKING, Any
 
+from nit import __version__
+from nit.utils.ci_context import detect_ci_context
+
+try:
+    import sentry_sdk
+    import sentry_sdk.metrics
+    from sentry_sdk.integrations.logging import LoggingIntegration as _LoggingIntegration
+
+    _sentry_available = True
+except ImportError:
+    _sentry_available = False
+
 if TYPE_CHECKING:
     from types import TracebackType
 
@@ -65,12 +77,9 @@ def init_sentry(config: SentryConfig) -> None:
         if not config.dsn:
             logger.warning("Sentry enabled but no DSN configured")
             return
-
-        import sentry_sdk
-        from sentry_sdk.integrations.logging import LoggingIntegration
-
-        from nit import __version__
-        from nit.utils.ci_context import detect_ci_context
+        if not _sentry_available:
+            logger.warning("Sentry enabled but sentry_sdk is not installed")
+            return
 
         ci_ctx = detect_ci_context()
         environment = config.environment or ("ci" if ci_ctx.is_ci else "local")
@@ -88,7 +97,7 @@ def init_sentry(config: SentryConfig) -> None:
             "in_app_include": ["nit"],
             "in_app_exclude": ["litellm", "sentry_sdk"],
             "integrations": [
-                LoggingIntegration(
+                _LoggingIntegration(
                     level=logging.INFO,
                     event_level=logging.ERROR,
                 ),
@@ -205,8 +214,6 @@ def record_metric_count(name: str, value: int = 1, **attrs: str | int | float) -
     """Emit a Sentry counter metric. No-op if Sentry is disabled."""
     if not _initialized["value"]:
         return
-    import sentry_sdk.metrics
-
     sentry_sdk.metrics.count(name, float(value), attributes=dict(attrs) if attrs else None)
 
 
@@ -216,8 +223,6 @@ def record_metric_distribution(
     """Emit a Sentry distribution metric. No-op if Sentry is disabled."""
     if not _initialized["value"]:
         return
-    import sentry_sdk.metrics
-
     sentry_sdk.metrics.distribution(
         name, value, unit=unit or None, attributes=dict(attrs) if attrs else None
     )
@@ -229,8 +234,6 @@ def record_metric_gauge(
     """Emit a Sentry gauge metric. No-op if Sentry is disabled."""
     if not _initialized["value"]:
         return
-    import sentry_sdk.metrics
-
     sentry_sdk.metrics.gauge(
         name, value, unit=unit or None, attributes=dict(attrs) if attrs else None
     )
@@ -269,6 +272,4 @@ def start_span(op: str, description: str) -> Any:
     """
     if not _initialized["value"]:
         return _NoOpSpan()
-    import sentry_sdk
-
     return sentry_sdk.start_span(op=op, description=description)

@@ -13,18 +13,18 @@
 
 ## Features
 
-- ✅ **Auto-detects** your languages, frameworks, and test infrastructure (no config needed)
-- ✅ **Generates framework-native tests** — Vitest, pytest, Jest, Playwright, and more
-- ✅ **Self-iterates** — validates generated tests, auto-fixes errors (up to 3 retries per test)
-- ✅ **Learns your patterns** — analyzes existing tests, matches your project's style and conventions
-- ✅ **Runs continuously** — CLI for local dev, GitHub Action for PRs, scheduled drift monitoring
-- ✅ **Coverage-driven** — identifies untested code, undertested functions, and dead zones
-- ✅ **Self-healing E2E tests** — when UI selectors break, nit updates them automatically
-- ✅ **LLM drift monitoring** — tracks prompt→output quality over time for AI features
-- ✅ **Multi-language** — Python, TypeScript/JavaScript, C/C++, Java, Kotlin, Go, Rust, C# (more coming)
-- ✅ **Monorepo-aware** — supports Turborepo, Nx, pnpm workspaces, Yarn, npm, Cargo, Go modules
-- ✅ **Parallel execution** — automatic test sharding with AST and LLM response caching
-- ✅ **Bring your own LLM** — works with OpenAI, Anthropic, Ollama, or any LiteLLM-supported provider
+- **Auto-detects** your languages, frameworks, and test infrastructure (no config needed)
+- **Generates framework-native tests** — Vitest, pytest, Jest, Playwright, and more
+- **Self-iterates** — validates generated tests, auto-fixes errors (up to 3 retries per test)
+- **Learns your patterns** — analyzes existing tests, matches your project's style and conventions
+- **Runs continuously** — CLI for local dev, GitHub Action for PRs, scheduled drift monitoring
+- **Coverage-driven** — identifies untested code, undertested functions, and dead zones
+- **Self-healing E2E tests** — when UI selectors break, nit updates them automatically
+- **LLM drift monitoring** — tracks prompt→output quality over time for AI features
+- **Multi-language** — Python, TypeScript/JavaScript, C/C++, Java, Kotlin, Go, Rust, C# (more coming)
+- **Monorepo-aware** — supports Turborepo, Nx, pnpm workspaces, Yarn, npm, Cargo, Go modules
+- **Parallel execution** — automatic test sharding with AST and LLM response caching
+- **Bring your own LLM** — works with OpenAI, Anthropic, Ollama, or any LiteLLM-supported provider
 
 ---
 
@@ -494,15 +494,21 @@ nit is made possible by these amazing open-source projects:
 ### Core
 - [LiteLLM](https://github.com/BerriAI/litellm) — Universal LLM API interface
 - [tree-sitter](https://tree-sitter.github.io/tree-sitter/) — Multi-language AST parsing
+- [tree-sitter-language-pack](https://github.com/guildai/tree-sitter-language-pack) — Language grammars for tree-sitter
 - [Click](https://click.palletsprojects.com/) — CLI framework
 - [Rich](https://github.com/Textualize/rich) — Terminal formatting and UI
+- [Textual](https://github.com/Textualize/textual) — TUI framework
 
 ### Data & Processing
 - [PyYAML](https://pyyaml.org/) — YAML configuration parsing
 - [sentence-transformers](https://www.sbert.net/) — Semantic embeddings for drift detection
 - [defusedxml](https://github.com/tiran/defusedxml) — Secure XML parsing
-- [httpx](https://www.python-httpx.org/) — HTTP client
+- [httpx](https://www.python-httpx.org/) — Async HTTP client
+- [Requests](https://requests.readthedocs.io/) — HTTP client
 - [jsonschema](https://python-jsonschema.readthedocs.io/) — JSON schema validation
+
+### Observability
+- [Sentry SDK](https://docs.sentry.io/platforms/python/) — Error tracking and telemetry
 
 ### Documentation
 - [MkDocs](https://www.mkdocs.org/) — Static site generator for documentation
@@ -510,9 +516,13 @@ nit is made possible by these amazing open-source projects:
 
 ### Development Tools
 - [pytest](https://pytest.org/) — Testing framework
+- [pytest-asyncio](https://github.com/pytest-dev/pytest-asyncio) — Async test support
+- [pytest-cov](https://github.com/pytest-dev/pytest-cov) — Test coverage plugin
 - [Black](https://black.readthedocs.io/) — Code formatter
 - [Ruff](https://docs.astral.sh/ruff/) — Fast Python linter
 - [mypy](https://mypy.readthedocs.io/) — Static type checker
+- [pre-commit](https://pre-commit.com/) — Git hook manager
+- [Hatchling](https://hatch.pypa.io/) — Build backend
 
 ---
 

@@ -60,6 +60,7 @@ class TestGitHubAPI:
         """Test creating a comment on a PR."""
         # Mock successful API response
         mock_response = mock.Mock()
+        mock_response.status_code = 200
         mock_response.json.return_value = {"id": 123, "html_url": "https://github.com/..."}
         mock_requests.post.return_value = mock_response
 
@@ -81,6 +82,7 @@ class TestGitHubAPI:
     def test_update_comment_success(self, mock_requests: mock.Mock) -> None:
         """Test updating an existing comment."""
         mock_response = mock.Mock()
+        mock_response.status_code = 200
         mock_response.json.return_value = {"id": 456, "html_url": "https://github.com/..."}
         mock_requests.patch.return_value = mock_response
 
@@ -101,6 +103,7 @@ class TestGitHubAPI:
     def test_find_comment_by_marker_found(self, mock_requests: mock.Mock) -> None:
         """Test finding a comment by marker."""
         mock_response = mock.Mock()
+        mock_response.status_code = 200
         mock_response.json.return_value = [
             {"id": 1, "body": "Other comment"},
             {"id": 2, "body": "<!-- marker:abc --> My comment"},
@@ -120,6 +123,7 @@ class TestGitHubAPI:
     def test_find_comment_by_marker_not_found(self, mock_requests: mock.Mock) -> None:
         """Test finding a comment by marker when it doesn't exist."""
         mock_response = mock.Mock()
+        mock_response.status_code = 200
         mock_response.json.return_value = [
             {"id": 1, "body": "Other comment"},
             {"id": 3, "body": "Another comment"},
@@ -138,11 +142,13 @@ class TestGitHubAPI:
         """Test upsert creates a new comment when none exists."""
         # Mock no existing comments
         get_response = mock.Mock()
+        get_response.status_code = 200
         get_response.json.return_value = []
         mock_requests.get.return_value = get_response
 
         # Mock successful create
         post_response = mock.Mock()
+        post_response.status_code = 200
         post_response.json.return_value = {"id": 789, "html_url": "https://github.com/..."}
         mock_requests.post.return_value = post_response
 
@@ -162,11 +168,13 @@ class TestGitHubAPI:
         """Test upsert updates an existing comment."""
         # Mock existing comment found
         get_response = mock.Mock()
+        get_response.status_code = 200
         get_response.json.return_value = [{"id": 999, "body": "<!-- marker:test --> Old comment"}]
         mock_requests.get.return_value = get_response
 
         # Mock successful update
         patch_response = mock.Mock()
+        patch_response.status_code = 200
         patch_response.json.return_value = {"id": 999, "html_url": "https://github.com/..."}
         mock_requests.patch.return_value = patch_response
 
@@ -647,6 +655,7 @@ class TestGitHubAPIExtended:
     @mock.patch("nit.utils.git.requests")
     def test_create_pull_request(self, mock_requests: mock.Mock) -> None:
         mock_response = mock.Mock()
+        mock_response.status_code = 200
         mock_response.json.return_value = {
             "number": 42,
             "html_url": "https://github.com/...",
@@ -668,6 +677,7 @@ class TestGitHubAPIExtended:
     @mock.patch("nit.utils.git.requests")
     def test_create_issue(self, mock_requests: mock.Mock) -> None:
         mock_response = mock.Mock()
+        mock_response.status_code = 200
         mock_response.json.return_value = {"number": 1}
         mock_requests.post.return_value = mock_response
 
@@ -678,6 +688,7 @@ class TestGitHubAPIExtended:
     @mock.patch("nit.utils.git.requests")
     def test_create_issue_no_labels(self, mock_requests: mock.Mock) -> None:
         mock_response = mock.Mock()
+        mock_response.status_code = 200
         mock_response.json.return_value = {"number": 2}
         mock_requests.post.return_value = mock_response
 
@@ -688,6 +699,7 @@ class TestGitHubAPIExtended:
     @mock.patch("nit.utils.git.requests")
     def test_create_issue_comment(self, mock_requests: mock.Mock) -> None:
         mock_response = mock.Mock()
+        mock_response.status_code = 200
         mock_response.json.return_value = {"id": 77}
         mock_requests.post.return_value = mock_response
 
@@ -715,10 +727,12 @@ class TestGitHubAPIExtended:
     def test_upsert_adds_marker(self, mock_requests: mock.Mock) -> None:
         """upsert_comment adds marker to body if missing."""
         get_resp = mock.Mock()
+        get_resp.status_code = 200
         get_resp.json.return_value = []
         mock_requests.get.return_value = get_resp
 
         post_resp = mock.Mock()
+        post_resp.status_code = 200
         post_resp.json.return_value = {"id": 1}
         mock_requests.post.return_value = post_resp
 

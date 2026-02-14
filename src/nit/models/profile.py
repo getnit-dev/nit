@@ -4,6 +4,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from nit.agents.detectors.dependency import (
+    DeclaredDependency,
+    DependencyProfile,
+    DependencySource,
+    InternalDependency,
+)
+from nit.agents.detectors.infra import (
+    CIConfig,
+    CIProvider,
+    DockerConfig,
+    InfraProfile,
+    ScriptInfo,
+)
 from nit.agents.detectors.signals import DetectedFramework, FrameworkCategory
 from nit.agents.detectors.stack import LanguageInfo
 from nit.agents.detectors.workspace import PackageInfo
@@ -39,6 +52,12 @@ class ProjectProfile:
     llm_providers: list[str] = field(default_factory=list)
     """LLM providers detected (e.g. ``["openai", "anthropic"]``)."""
 
+    infra_profile: InfraProfile | None = None
+    """Full infrastructure detection result, or ``None`` if not yet detected."""
+
+    dependency_profile: DependencyProfile | None = None
+    """Full dependency detection result, or ``None`` if not yet detected."""
+
     # ── Convenience accessors ──────────────────────────────────────
 
     @property
@@ -64,7 +83,7 @@ class ProjectProfile:
 
     def to_dict(self) -> dict[str, object]:
         """Serialise the profile to a JSON-compatible dict."""
-        return {
+        result: dict[str, object] = {
             "root": self.root,
             "primary_language": self.primary_language,
             "workspace_tool": self.workspace_tool,
@@ -98,6 +117,63 @@ class ProjectProfile:
                 for pkg in self.packages
             ],
         }
+
+        if self.infra_profile is not None:
+            result["infra"] = {
+                "root": self.infra_profile.root,
+                "ci_configs": [
+                    {
+                        "provider": c.provider.value,
+                        "file_path": c.file_path,
+                        "test_commands": c.test_commands,
+                    }
+                    for c in self.infra_profile.ci_configs
+                ],
+                "docker": {
+                    "has_dockerfile": self.infra_profile.docker.has_dockerfile,
+                    "has_compose": self.infra_profile.docker.has_compose,
+                    "has_dockerignore": self.infra_profile.docker.has_dockerignore,
+                    "dockerfile_paths": self.infra_profile.docker.dockerfile_paths,
+                    "compose_paths": self.infra_profile.docker.compose_paths,
+                },
+                "makefiles": self.infra_profile.makefiles,
+                "scripts": [
+                    {
+                        "file_path": s.file_path,
+                        "script_type": s.script_type,
+                        "name": s.name,
+                    }
+                    for s in self.infra_profile.scripts
+                ],
+                "test_commands": self.infra_profile.test_commands,
+            }
+
+        if self.dependency_profile is not None:
+            result["dependencies"] = {
+                "root": self.dependency_profile.root,
+                "declared_deps": [
+                    {
+                        "name": d.name,
+                        "version_spec": d.version_spec,
+                        "source": d.source.value,
+                        "is_dev": d.is_dev,
+                        "package_path": d.package_path,
+                    }
+                    for d in self.dependency_profile.declared_deps
+                ],
+                "internal_deps": [
+                    {
+                        "from_package": d.from_package,
+                        "to_package": d.to_package,
+                        "dependency_type": d.dependency_type,
+                    }
+                    for d in self.dependency_profile.internal_deps
+                ],
+                "lock_files": self.dependency_profile.lock_files,
+                "manifest_files": self.dependency_profile.manifest_files,
+            }
+
+        return result
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> ProjectProfile:
@@ -151,6 +227,9 @@ class ProjectProfile:
         llm_count_raw = data.get("llm_usage_count", 0)
         llm_usage_count = int(llm_count_raw) if isinstance(llm_count_raw, (int, float)) else 0
 
+        infra_profile = _reconstruct_infra_profile(data.get("infra"))
+        dependency_profile = _reconstruct_dependency_profile(data.get("dependencies"))
+
         return cls(
             root=str(data.get("root", "")),
             languages=languages,
@@ -159,4 +238,115 @@ class ProjectProfile:
             workspace_tool=str(data.get("workspace_tool", "generic")),
             llm_usage_count=llm_usage_count,
             llm_providers=llm_providers,
+            infra_profile=infra_profile,
+            dependency_profile=dependency_profile,
         )
+
+
+# ── Reconstruction helpers (late imports to avoid circular deps) ──
+
+
+def _reconstruct_infra_profile(raw: object) -> InfraProfile | None:
+    """Reconstruct an ``InfraProfile`` from serialised dict, or ``None``."""
+    if not isinstance(raw, dict):
+        return None
+
+    ci_configs_raw = raw.get("ci_configs", [])
+    ci_configs: list[CIConfig] = []
+    if isinstance(ci_configs_raw, list):
+        ci_configs = [
+            CIConfig(
+                provider=CIProvider(str(c["provider"])),
+                file_path=str(c["file_path"]),
+                test_commands=list(c.get("test_commands", [])),
+            )
+            for c in ci_configs_raw
+            if isinstance(c, dict)
+        ]
+
+    docker_raw = raw.get("docker", {})
+    docker = DockerConfig()
+    if isinstance(docker_raw, dict):
+        docker = DockerConfig(
+            has_dockerfile=bool(docker_raw.get("has_dockerfile")),
+            has_compose=bool(docker_raw.get("has_compose")),
+            has_dockerignore=bool(docker_raw.get("has_dockerignore")),
+            dockerfile_paths=list(docker_raw.get("dockerfile_paths", [])),
+            compose_paths=list(docker_raw.get("compose_paths", [])),
+        )
+
+    makefiles_raw = raw.get("makefiles", [])
+    makefiles = list(makefiles_raw) if isinstance(makefiles_raw, list) else []
+
+    scripts_raw = raw.get("scripts", [])
+    scripts: list[ScriptInfo] = []
+    if isinstance(scripts_raw, list):
+        scripts = [
+            ScriptInfo(
+                file_path=str(s["file_path"]),
+                script_type=str(s["script_type"]),
+                name=str(s["name"]),
+            )
+            for s in scripts_raw
+            if isinstance(s, dict)
+        ]
+
+    test_commands_raw = raw.get("test_commands", [])
+    test_commands = list(test_commands_raw) if isinstance(test_commands_raw, list) else []
+
+    return InfraProfile(
+        root=str(raw.get("root", "")),
+        ci_configs=ci_configs,
+        docker=docker,
+        makefiles=makefiles,
+        scripts=scripts,
+        test_commands=test_commands,
+    )
+
+
+def _reconstruct_dependency_profile(raw: object) -> DependencyProfile | None:
+    """Reconstruct a ``DependencyProfile`` from serialised dict, or ``None``."""
+    if not isinstance(raw, dict):
+        return None
+
+    declared_raw = raw.get("declared_deps", [])
+    declared_deps: list[DeclaredDependency] = []
+    if isinstance(declared_raw, list):
+        declared_deps = [
+            DeclaredDependency(
+                name=str(d["name"]),
+                version_spec=str(d.get("version_spec", "")),
+                source=DependencySource(str(d.get("source", "manifest"))),
+                is_dev=bool(d.get("is_dev")),
+                package_path=str(d.get("package_path", ".")),
+            )
+            for d in declared_raw
+            if isinstance(d, dict)
+        ]
+
+    internal_raw = raw.get("internal_deps", [])
+    internal_deps: list[InternalDependency] = []
+    if isinstance(internal_raw, list):
+        internal_deps = [
+            InternalDependency(
+                from_package=str(d["from_package"]),
+                to_package=str(d["to_package"]),
+                dependency_type=str(d.get("dependency_type", "runtime")),
+            )
+            for d in internal_raw
+            if isinstance(d, dict)
+        ]
+
+    lock_files_raw = raw.get("lock_files", [])
+    lock_files = list(lock_files_raw) if isinstance(lock_files_raw, list) else []
+
+    manifest_files_raw = raw.get("manifest_files", [])
+    manifest_files = list(manifest_files_raw) if isinstance(manifest_files_raw, list) else []
+
+    return DependencyProfile(
+        root=str(raw.get("root", "")),
+        declared_deps=declared_deps,
+        internal_deps=internal_deps,
+        lock_files=lock_files,
+        manifest_files=manifest_files,
+    )

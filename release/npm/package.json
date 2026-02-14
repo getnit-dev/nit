@@ -1,0 +1,36 @@
+{
+  "name": "getnit",
+  "version": "0.1.0",
+  "description": "AI testing, documentation & quality agent",
+  "license": "MIT",
+  "bin": {
+    "nit": "./bin/nit"
+  },
+  "scripts": {
+    "postinstall": "node postinstall.js"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "keywords": [
+    "testing",
+    "ai",
+    "quality",
+    "documentation",
+    "code-analysis"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/getnit-dev/nit"
+  },
+  "homepage": "https://getnit.dev",
+  "bugs": {
+    "url": "https://github.com/getnit-dev/nit/issues"
+  }
+}

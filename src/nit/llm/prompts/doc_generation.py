@@ -53,7 +53,7 @@ class DocGenerationContext:
     """Full source code."""
 
     style_preference: str = ""
-    """Docstring style preference (e.g., 'google', 'numpy' for Python)."""
+    """Docstring style preference for Sphinx: 'google', 'numpy', or '' (default)."""
 
 
 def build_doc_generation_messages(context: DocGenerationContext) -> list[LLMMessage]:
@@ -178,14 +178,14 @@ def _build_system_instruction(context: DocGenerationContext) -> str:
         "You generate clear, concise documentation comments for code.",
     )
 
-    # Apply style preference override for sphinx (Python)
-    if context.style_preference and context.doc_framework.lower() == "sphinx":
-        style = context.style_preference.lower()
-        if style == "google":
+    # Override sphinx instruction when a specific style is requested
+    if context.doc_framework.lower() == "sphinx" and context.style_preference:
+        if context.style_preference == "google":
             framework_instruction = (
                 "You generate Google-style Python docstrings for Sphinx documentation.\n"
-                "Use triple-quoted docstrings with Google format:\n"
+                "Use triple-quoted docstrings with Google-style formatting:\n"
                 '"""Brief description.\n\n'
+                "Extended description if needed.\n\n"
                 "Args:\n"
                 "    param1: Description.\n"
                 "    param2: Description.\n\n"
@@ -195,19 +195,22 @@ def _build_system_instruction(context: DocGenerationContext) -> str:
                 "    ExceptionType: When this happens.\n"
                 '"""'
             )
-        elif style == "numpy":
+        elif context.style_preference == "numpy":
             framework_instruction = (
                 "You generate NumPy-style Python docstrings for Sphinx documentation.\n"
-                "Use triple-quoted docstrings with NumPy format:\n"
+                "Use triple-quoted docstrings with NumPy-style formatting:\n"
                 '"""Brief description.\n\n'
+                "Extended description if needed.\n\n"
                 "Parameters\n"
                 "----------\n"
                 "param1 : type\n"
+                "    Description.\n"
+                "param2 : type\n"
                 "    Description.\n\n"
                 "Returns\n"
                 "-------\n"
                 "type\n"
-                "    Description.\n\n"
+                "    Description of return value.\n\n"
                 "Raises\n"
                 "------\n"
                 "ExceptionType\n"
@@ -295,6 +298,80 @@ def _build_user_message(context: DocGenerationContext) -> str:
     return "\n".join(sections)
 
 
+def build_mismatch_detection_messages(
+    *,
+    documented_items: list[tuple[str, str, str]],
+    language: str,
+    doc_framework: str,
+    source_code: str,
+    source_path: str,
+) -> list[LLMMessage]:
+    """Build LLM messages for detecting mismatches between docs and code.
+
+    Each item in *documented_items* is a ``(function_name, signature, docstring)``
+    tuple.  The resulting messages ask the model to return a JSON array of
+    mismatch objects.
+
+    Args:
+        documented_items: Tuples of (function_name, signature, docstring).
+        language: Programming language of the source code.
+        doc_framework: Documentation framework in use.
+        source_code: Full source code to analyse.
+        source_path: Path to the source file.
+
+    Returns:
+        A two-element list of LLM messages (system + user).
+    """
+    system_content = (
+        "You are a documentation-quality auditor.  Compare each documented "
+        "function/class against the actual source code and report mismatches.\n\n"
+        "Return a JSON array of objects.  Each object must have:\n"
+        '- "function_name": name of the function or class\n'
+        '- "issue_type": one of "missing_param", "extra_param", '
+        '"semantic_drift", "wrong_return", "wrong_exception"\n'
+        '- "detail": short human-readable explanation of the mismatch\n\n'
+        "If there are no mismatches, return an empty JSON array: []"
+    )
+
+    sections: list[str] = []
+
+    sections.append("## Documented Functions/Classes to Check")
+    sections.append("")
+
+    for func_name, signature, docstring in documented_items:
+        sections.append(f"### {func_name}")
+        sections.append("")
+        sections.append(f"- **Signature**: `{signature}`")
+        sections.append(f"- **Docstring**:\n```\n{docstring}\n```")
+        sections.append("")
+
+    sections.append("## Source Code")
+    sections.append("")
+    sections.append(f"File: {source_path}")
+    sections.append(f"Language: {language}")
+    sections.append(f"Documentation Framework: {doc_framework}")
+    sections.append("")
+    sections.append(f"```{language}")
+    sections.append(source_code)
+    sections.append("```")
+    sections.append("")
+
+    sections.append("## Task")
+    sections.append("")
+    sections.append(
+        "Analyse each documented item against the source code above and "
+        "return a JSON array of mismatch objects as described in the system "
+        "instructions.  If everything is consistent, return `[]`."
+    )
+
+    user_content = "\n".join(sections)
+
+    return [
+        LLMMessage(role="system", content=system_content),
+        LLMMessage(role="user", content=user_content),
+    ]
+
+
 class DocGenerationTemplate(PromptTemplate):
     """Base template for documentation generation."""
 
@@ -326,70 +403,3 @@ class DocGenerationTemplate(PromptTemplate):
             List of LLM messages.
         """
         return build_doc_generation_messages(self._doc_context)
-
-
-def build_mismatch_detection_messages(
-    documented_items: list[tuple[str, str, str]],
-    language: str,
-    doc_framework: str,
-    source_code: str,
-    source_path: str,
-) -> list[LLMMessage]:
-    """Build LLM messages for detecting documentation/code semantic mismatches.
-
-    Args:
-        documented_items: List of (name, signature, docstring) tuples.
-        language: Programming language.
-        doc_framework: Documentation framework.
-        source_code: Full source code.
-        source_path: Path to source file.
-
-    Returns:
-        List of LLM messages (system + user).
-    """
-    system_msg = (
-        "You are a documentation accuracy checker. Given source code and existing "
-        "documentation, identify semantic mismatches where the documentation does not "
-        "accurately describe the code.\n\n"
-        "Look for:\n"
-        "- Missing parameters not mentioned in the doc\n"
-        "- Parameters documented but not in the signature\n"
-        "- Incorrect return type/value descriptions\n"
-        "- Stale references to removed functionality\n"
-        "- Description that contradicts what the code does\n\n"
-        "Return a JSON array of mismatches. If no mismatches are found, return [].\n"
-        "Each mismatch should have:\n"
-        '- "function": the function/class name\n'
-        '- "type": one of "missing_param", "extra_param", "wrong_return", '
-        '"semantic_drift", "stale_reference"\n'
-        '- "description": brief explanation\n'
-        '- "severity": "error" or "warning"\n\n'
-        "Return ONLY the JSON array, no other text."
-    )
-
-    sections: list[str] = [
-        f"## File: {source_path}",
-        f"Language: {language}, Framework: {doc_framework}",
-        "",
-        "## Source Code",
-        "",
-        f"```{language}",
-        source_code,
-        "```",
-        "",
-        "## Documented Functions/Classes to Check",
-        "",
-    ]
-
-    for name, signature, docstring in documented_items:
-        sections.append(f"### {name}")
-        sections.append(f"Signature: `{signature}`")
-        sections.append(f"Documentation:\n```\n{docstring}\n```")
-        sections.append("")
-
-    sections.append("Return a JSON array of mismatches found (or [] if none).")
-
-    return [
-        LLMMessage(role="system", content=system_msg),
-        LLMMessage(role="user", content="\n".join(sections)),
-    ]

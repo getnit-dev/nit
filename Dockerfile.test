@@ -1,0 +1,17 @@
+FROM python:3.12-slim
+
+# Install Node.js (LTS) and Java (for multi-language test execution)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl \
+        gnupg \
+        default-jdk-headless \
+    && curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir getnit
+
+WORKDIR /workspace
+VOLUME ["/workspace"]
+
+ENTRYPOINT ["nit"]

@@ -1,0 +1,82 @@
+name: Build Binaries
+
+on:
+  workflow_call:
+    inputs:
+      upload-artifacts:
+        description: "Whether to upload artifacts"
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux
+            arch: x64
+            asset: nit-linux-x64.tar.gz
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            asset: nit-linux-arm64.tar.gz
+          - runner: macos-13
+            platform: darwin
+            arch: x64
+            asset: nit-darwin-x64.tar.gz
+          - runner: macos-latest
+            platform: darwin
+            arch: arm64
+            asset: nit-darwin-arm64.tar.gz
+          - runner: windows-latest
+            platform: windows
+            arch: x64
+            asset: nit-windows-x64.zip
+
+    runs-on: ${{ matrix.runner }}
+    name: Build ${{ matrix.platform }}-${{ matrix.arch }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install .
+
+      - name: Build binary
+        run: pyinstaller nit.spec
+
+      - name: Verify binary (Unix)
+        if: matrix.platform != 'windows'
+        run: ./dist/nit --version
+
+      - name: Verify binary (Windows)
+        if: matrix.platform == 'windows'
+        run: .\dist\nit.exe --version
+
+      - name: Package binary (Unix)
+        if: matrix.platform != 'windows'
+        run: tar -czf ${{ matrix.asset }} -C dist nit
+
+      - name: Package binary (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist\nit.exe -DestinationPath ${{ matrix.asset }}
+
+      - name: Upload artifact
+        if: inputs.upload-artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          retention-days: 7

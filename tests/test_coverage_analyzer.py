@@ -439,9 +439,11 @@ async def test_no_coverage_adapter_found(
 
     result = await analyzer.run(task)
 
-    # Should fail gracefully when no adapter found
-    assert result.status == TaskStatus.FAILED
-    assert "No coverage adapter" in result.errors[0]
+    # With no coverage adapter the analyzer falls back to source-file
+    # scanning and still completes successfully.
+    assert result.status == TaskStatus.COMPLETED
+    assert isinstance(result.result, dict)
+    assert "gap_report" in result.result
 
 
 @pytest.mark.asyncio

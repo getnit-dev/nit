@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -80,6 +81,53 @@ class PullRequestParams:
 
 class GitHubAPIError(Exception):
     """Exception raised when GitHub API operations fail."""
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class GitHubNotFoundError(GitHubAPIError):
+    """Raised when a GitHub resource is not found (404)."""
+
+
+class GitHubForbiddenError(GitHubAPIError):
+    """Raised when access to a GitHub resource is denied (403)."""
+
+
+class GitHubRateLimitError(GitHubAPIError):
+    """Raised when the GitHub API rate limit is exceeded (429)."""
+
+
+class GitHubServerError(GitHubAPIError):
+    """Raised when the GitHub API returns a server error (5xx)."""
+
+
+_GITHUB_MAX_RETRIES = 3
+_GITHUB_RETRY_BASE_DELAY = 1.0
+_GITHUB_RETRY_BACKOFF = 2.0
+_HTTP_CLIENT_ERROR = 400
+_HTTP_FORBIDDEN = 403
+_HTTP_NOT_FOUND = 404
+_HTTP_RATE_LIMIT = 429
+_HTTP_SERVER_ERROR = 500
+
+
+def _raise_for_status(response: requests.Response) -> None:
+    """Raise a specific GitHubAPIError subclass based on HTTP status code."""
+    code = response.status_code
+    if code < _HTTP_CLIENT_ERROR:
+        return
+    msg = f"GitHub API error {code}: {response.text[:200]}"
+    if code == _HTTP_NOT_FOUND:
+        raise GitHubNotFoundError(msg, status_code=code)
+    if code == _HTTP_FORBIDDEN:
+        raise GitHubForbiddenError(msg, status_code=code)
+    if code == _HTTP_RATE_LIMIT:
+        raise GitHubRateLimitError(msg, status_code=code)
+    if code >= _HTTP_SERVER_ERROR:
+        raise GitHubServerError(msg, status_code=code)
+    raise GitHubAPIError(msg, status_code=code)
 
 
 class GitHubAPI:
@@ -157,6 +205,9 @@ class GitHubAPI:
     def find_comment_by_marker(self, pr_info: GitHubPRInfo, marker: str) -> dict[str, Any] | None:
         """Find a comment on a PR by a unique marker string.
 
+        Paginates through all comments until the marker is found or all
+        pages have been exhausted.
+
         Args:
             pr_info: Pull request information.
             marker: Unique marker to search for in comment body.
@@ -167,17 +218,24 @@ class GitHubAPI:
         Raises:
             GitHubAPIError: If the API request fails.
         """
-        url = (
+        base_url = (
             f"{GITHUB_API_BASE}/repos/{pr_info.owner}/{pr_info.repo}/"
             f"issues/{pr_info.pr_number}/comments"
         )
 
-        comments: list[dict[str, Any]] = self._get(url)
+        per_page = 100
+        max_pages = 100
+        for page in range(1, max_pages + 1):
+            url = f"{base_url}?page={page}&per_page={per_page}"
+            comments: list[dict[str, Any]] = self._get(url)
 
-        for comment in comments:
-            if marker in comment.get("body", ""):
-                result: dict[str, Any] = comment
-                return result
+            for comment in comments:
+                if marker in comment.get("body", ""):
+                    result: dict[str, Any] = comment
+                    return result
+
+            if len(comments) < per_page:
+                break
 
         return None
 
@@ -308,7 +366,7 @@ class GitHubAPI:
         return result
 
     def _get(self, url: str) -> Any:
-        """Make a GET request to the GitHub API.
+        """Make a GET request to the GitHub API with retry.
 
         Args:
             url: Full API URL.
@@ -317,17 +375,12 @@ class GitHubAPI:
             Parsed JSON response.
 
         Raises:
-            GitHubAPIError: If the request fails.
+            GitHubAPIError: If the request fails after retries.
         """
-        try:
-            response = requests.get(url, headers=self._session_headers, timeout=30)
-            response.raise_for_status()
-            return response.json()
-        except Exception as exc:
-            raise GitHubAPIError(f"GET request failed: {exc}") from exc
+        return self._request_with_retry("GET", url)
 
     def _post(self, url: str, data: dict[str, Any]) -> Any:
-        """Make a POST request to the GitHub API.
+        """Make a POST request to the GitHub API with retry.
 
         Args:
             url: Full API URL.
@@ -337,17 +390,12 @@ class GitHubAPI:
             Parsed JSON response.
 
         Raises:
-            GitHubAPIError: If the request fails.
+            GitHubAPIError: If the request fails after retries.
         """
-        try:
-            response = requests.post(url, json=data, headers=self._session_headers, timeout=30)
-            response.raise_for_status()
-            return response.json()
-        except Exception as exc:
-            raise GitHubAPIError(f"POST request failed: {exc}") from exc
+        return self._request_with_retry("POST", url, data=data)
 
     def _patch(self, url: str, data: dict[str, Any]) -> Any:
-        """Make a PATCH request to the GitHub API.
+        """Make a PATCH request to the GitHub API with retry.
 
         Args:
             url: Full API URL.
@@ -357,14 +405,65 @@ class GitHubAPI:
             Parsed JSON response.
 
         Raises:
-            GitHubAPIError: If the request fails.
+            GitHubAPIError: If the request fails after retries.
         """
-        try:
-            response = requests.patch(url, json=data, headers=self._session_headers, timeout=30)
-            response.raise_for_status()
-            return response.json()
-        except Exception as exc:
-            raise GitHubAPIError(f"PATCH request failed: {exc}") from exc
+        return self._request_with_retry("PATCH", url, data=data)
+
+    def _request_with_retry(
+        self,
+        method: str,
+        url: str,
+        *,
+        data: dict[str, Any] | None = None,
+    ) -> Any:
+        """Execute an HTTP request with retry on transient errors.
+
+        Retries on 5xx server errors and 429 rate-limit responses using
+        exponential backoff.  Client errors (4xx except 429) are raised
+        immediately.
+        """
+        last_exc: GitHubAPIError | None = None
+
+        for attempt in range(_GITHUB_MAX_RETRIES + 1):
+            try:
+                if method == "GET":
+                    response = requests.get(url, headers=self._session_headers, timeout=30)
+                elif method == "POST":
+                    response = requests.post(
+                        url, json=data, headers=self._session_headers, timeout=30
+                    )
+                elif method == "PATCH":
+                    response = requests.patch(
+                        url, json=data, headers=self._session_headers, timeout=30
+                    )
+                else:
+                    raise GitHubAPIError(f"Unsupported HTTP method: {method}")
+
+                _raise_for_status(response)
+                return response.json()
+
+            except (GitHubServerError, GitHubRateLimitError) as exc:
+                last_exc = exc
+                if attempt < _GITHUB_MAX_RETRIES:
+                    delay = _GITHUB_RETRY_BASE_DELAY * (_GITHUB_RETRY_BACKOFF**attempt)
+                    logger.warning(
+                        "GitHub %s %s failed (attempt %d/%d): %s — retrying in %.1fs",
+                        method,
+                        url,
+                        attempt + 1,
+                        _GITHUB_MAX_RETRIES + 1,
+                        exc,
+                        delay,
+                    )
+                    time.sleep(delay)
+            except GitHubAPIError:
+                raise
+            except Exception as exc:
+                raise GitHubAPIError(f"{method} request failed: {exc}") from exc
+
+        if last_exc is not None:
+            raise last_exc
+        raise GitHubAPIError(f"{method} request failed after retries")
 
 
 def get_pr_info_from_env() -> GitHubPRInfo | None:

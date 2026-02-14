@@ -17,18 +17,20 @@ from typing import TYPE_CHECKING, Any
 from nit.memory.analytics_history import AnalyticsHistory
 from nit.models.analytics import (
     AnalyticsEvent,
-    BugSnapshot,
     CoverageSnapshot,
-    DriftSnapshot,
     EventType,
-    LLMUsage,
-    TestExecutionSnapshot,
 )
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from nit.llm.usage_callback import BatchedUsageReporter
+    from nit.models.analytics import (
+        BugSnapshot,
+        DriftSnapshot,
+        LLMUsage,
+        TestExecutionSnapshot,
+    )
     from nit.models.coverage import CoverageReport
 
 logger = logging.getLogger(__name__)
@@ -68,40 +70,19 @@ class AnalyticsCollector:
 
     def record_llm_usage(
         self,
-        provider: str,
-        model: str,
-        prompt_tokens: int,
-        completion_tokens: int,
-        cost_usd: float | None = None,
-        duration_ms: float | None = None,
-        cached_tokens: int = 0,
+        usage: LLMUsage,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         """Record an LLM usage event.
 
         Args:
-            provider: LLM provider (e.g., "openai", "anthropic").
-            model: Model name (e.g., "gpt-4", "claude-sonnet-4-5").
-            prompt_tokens: Number of input tokens.
-            completion_tokens: Number of output tokens.
-            cost_usd: Estimated cost in USD (None for local models).
-            duration_ms: Request duration in milliseconds.
-            cached_tokens: Number of cached tokens (if applicable).
+            usage: LLM usage metrics for the request.
             metadata: Additional event metadata.
         """
         try:
             event = AnalyticsEvent(
                 event_type=EventType.LLM_REQUEST,
-                llm_usage=LLMUsage(
-                    provider=provider,
-                    model=model,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=prompt_tokens + completion_tokens,
-                    cost_usd=cost_usd,
-                    duration_ms=duration_ms,
-                    cached_tokens=cached_tokens,
-                ),
+                llm_usage=usage,
                 metadata=metadata or {},
             )
 
@@ -154,40 +135,21 @@ class AnalyticsCollector:
 
     def record_test_execution(
         self,
-        total: int,
-        passed: int,
-        failed: int,
-        skipped: int = 0,
-        duration_ms: float | None = None,
-        flaky_tests: list[str] | None = None,
+        snapshot: TestExecutionSnapshot,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         """Record a test execution snapshot.
 
         Args:
-            total: Total number of tests.
-            passed: Number of passed tests.
-            failed: Number of failed tests.
-            skipped: Number of skipped tests.
-            duration_ms: Total execution time in milliseconds.
-            flaky_tests: List of flaky test names.
+            snapshot: Test execution snapshot with results.
             metadata: Additional event metadata.
         """
         try:
             event = AnalyticsEvent(
                 event_type=EventType.TEST_EXECUTION,
-                test_execution=TestExecutionSnapshot(
-                    timestamp=datetime.now(UTC).isoformat(),
-                    total_tests=total,
-                    passed_tests=passed,
-                    failed_tests=failed,
-                    skipped_tests=skipped,
-                    total_duration_ms=duration_ms,
-                    flaky_tests=flaky_tests or [],
-                ),
-                tests_generated=None,  # For generated test runs, caller can set this
-                tests_passing=passed,
-                tests_failing=failed,
+                test_execution=snapshot,
+                tests_passing=snapshot.passed_tests,
+                tests_failing=snapshot.failed_tests,
                 metadata=metadata or {},
             )
 
@@ -198,41 +160,22 @@ class AnalyticsCollector:
 
     def record_bug(
         self,
-        bug_type: str,
-        severity: str,
-        status: str,
-        file_path: str,
-        line_number: int | None = None,
-        title: str = "",
-        pr_url: str | None = None,
+        snapshot: BugSnapshot,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         """Record a bug event (discovered, fixed, ignored).
 
         Args:
-            bug_type: Type of bug (from BugType enum value).
-            severity: Severity level (from BugSeverity enum value).
-            status: Bug status: "discovered", "fixed", "ignored".
-            file_path: File where bug was found.
-            line_number: Line number of bug.
-            title: Short bug description.
-            pr_url: URL of PR that fixed the bug (if fixed).
+            snapshot: Bug snapshot with details.
             metadata: Additional event metadata.
         """
         try:
             event = AnalyticsEvent(
-                event_type=(EventType.BUG_FIXED if status == "fixed" else EventType.BUG_DISCOVERED),
-                bug=BugSnapshot(
-                    timestamp=datetime.now(UTC).isoformat(),
-                    bug_type=bug_type,
-                    severity=severity,
-                    status=status,
-                    file_path=file_path,
-                    line_number=line_number,
-                    title=title,
-                    pr_url=pr_url,
+                event_type=(
+                    EventType.BUG_FIXED if snapshot.status == "fixed" else EventType.BUG_DISCOVERED
                 ),
-                files=[file_path],
+                bug=snapshot,
+                files=[snapshot.file_path],
                 metadata=metadata or {},
             )
 
@@ -243,34 +186,19 @@ class AnalyticsCollector:
 
     def record_drift_test(
         self,
-        test_id: str,
-        test_name: str,
-        similarity_score: float,
-        passed: bool,
-        drift_detected: bool,
+        snapshot: DriftSnapshot,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         """Record a drift test result.
 
         Args:
-            test_id: Unique test identifier.
-            test_name: Human-readable test name.
-            similarity_score: Similarity score (0.0 to 1.0).
-            passed: Whether drift test passed.
-            drift_detected: Whether drift was detected.
+            snapshot: Drift test result snapshot.
             metadata: Additional event metadata.
         """
         try:
             event = AnalyticsEvent(
                 event_type=EventType.DRIFT_TEST,
-                drift=DriftSnapshot(
-                    timestamp=datetime.now(UTC).isoformat(),
-                    test_id=test_id,
-                    test_name=test_name,
-                    similarity_score=similarity_score,
-                    passed=passed,
-                    drift_detected=drift_detected,
-                ),
+                drift=snapshot,
                 metadata=metadata or {},
             )
 

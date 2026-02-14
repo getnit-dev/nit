@@ -16,6 +16,14 @@ _REPORTS_PATH = "/api/v1/reports"
 _BUGS_PATH = "/api/v1/bugs"
 _USAGE_PATH = "/api/v1/usage"
 _MEMORY_PATH = "/api/v1/memory"
+_DRIFT_PATH = "/api/v1/drift"
+_SECURITY_PATH = "/api/v1/security"
+_RISK_PATH = "/api/v1/risk"
+_COVERAGE_GAPS_PATH = "/api/v1/coverage-gaps"
+_FIXES_PATH = "/api/v1/fixes"
+_ROUTES_PATH = "/api/v1/routes"
+_DOC_COVERAGE_PATH = "/api/v1/doc-coverage"
+_PROMPTS_PATH = "/api/v1/prompts"
 _VALID_PLATFORM_MODES = {"byok", "disabled"}
 _HTTP_SUCCESS_MIN = 200
 _HTTP_SUCCESS_MAX = 300
@@ -91,6 +99,41 @@ def build_memory_url(platform_url: str) -> str:
     return _join_platform_path(platform_url, _MEMORY_PATH)
 
 
+def build_drift_url(platform_url: str) -> str:
+    """Build the platform drift API URL."""
+    return _join_platform_path(platform_url, _DRIFT_PATH)
+
+
+def build_security_url(platform_url: str) -> str:
+    """Build the platform security API URL."""
+    return _join_platform_path(platform_url, _SECURITY_PATH)
+
+
+def build_risk_url(platform_url: str) -> str:
+    """Build the platform risk API URL."""
+    return _join_platform_path(platform_url, _RISK_PATH)
+
+
+def build_coverage_gaps_url(platform_url: str) -> str:
+    """Build the platform coverage-gaps API URL."""
+    return _join_platform_path(platform_url, _COVERAGE_GAPS_PATH)
+
+
+def build_fixes_url(platform_url: str) -> str:
+    """Build the platform fixes API URL."""
+    return _join_platform_path(platform_url, _FIXES_PATH)
+
+
+def build_routes_url(platform_url: str) -> str:
+    """Build the platform routes API URL."""
+    return _join_platform_path(platform_url, _ROUTES_PATH)
+
+
+def build_doc_coverage_url(platform_url: str) -> str:
+    """Build the platform doc-coverage API URL."""
+    return _join_platform_path(platform_url, _DOC_COVERAGE_PATH)
+
+
 def configure_platform_environment(config: PlatformRuntimeConfig) -> None:
     """Store platform config for usage reporting.
 
@@ -101,7 +144,6 @@ def configure_platform_environment(config: PlatformRuntimeConfig) -> None:
     # Non-secret values can live in env vars (used by external tools)
     non_secret = {
         "NIT_PLATFORM_URL": normalize_platform_url(config.url),
-        "NIT_PLATFORM_USER_ID": config.user_id.strip(),
         "NIT_PLATFORM_PROJECT_ID": config.project_id.strip(),
         "NIT_PLATFORM_KEY_HASH": config.key_hash.strip(),
     }
@@ -193,6 +235,41 @@ def post_platform_bug(
     return body if isinstance(body, dict) else {}
 
 
+def post_platform_drift(
+    config: PlatformRuntimeConfig,
+    results: list[dict[str, Any]],
+    *,
+    timeout_seconds: float = 15.0,
+) -> dict[str, Any]:
+    """Upload drift test results to the platform API."""
+    platform_url = normalize_platform_url(config.url)
+    api_key = config.api_key.strip()
+    if not platform_url or not api_key:
+        raise PlatformClientError("Platform URL and API key are required for drift upload.")
+
+    response = requests.post(
+        build_drift_url(platform_url),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=results,
+        timeout=timeout_seconds,
+    )
+    if response.status_code < _HTTP_SUCCESS_MIN or response.status_code >= _HTTP_SUCCESS_MAX:
+        message = response.text.strip()[:300]
+        raise PlatformClientError(
+            f"Platform drift upload failed (HTTP {response.status_code}): {message}"
+        )
+
+    try:
+        body = response.json()
+    except ValueError:
+        return {}
+
+    return body if isinstance(body, dict) else {}
+
+
 def push_platform_memory(
     config: PlatformRuntimeConfig,
     payload: Mapping[str, Any],
@@ -261,3 +338,298 @@ def pull_platform_memory(
         return {}
 
     return body if isinstance(body, dict) else {}
+
+
+def post_platform_security(
+    config: PlatformRuntimeConfig,
+    payload: Mapping[str, Any],
+    *,
+    timeout_seconds: float = 15.0,
+) -> dict[str, Any]:
+    """Upload a security payload to the platform API."""
+    platform_url = normalize_platform_url(config.url)
+    api_key = config.api_key.strip()
+    if not platform_url or not api_key:
+        raise PlatformClientError("Platform URL and API key are required for security upload.")
+
+    response = requests.post(
+        build_security_url(platform_url),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=dict(payload),
+        timeout=timeout_seconds,
+    )
+    if response.status_code < _HTTP_SUCCESS_MIN or response.status_code >= _HTTP_SUCCESS_MAX:
+        message = response.text.strip()[:300]
+        raise PlatformClientError(
+            f"Platform security upload failed (HTTP {response.status_code}): {message}"
+        )
+
+    try:
+        body = response.json()
+    except ValueError:
+        return {}
+
+    return body if isinstance(body, dict) else {}
+
+
+def post_platform_risk(
+    config: PlatformRuntimeConfig,
+    payload: Mapping[str, Any],
+    *,
+    timeout_seconds: float = 15.0,
+) -> dict[str, Any]:
+    """Upload a risk payload to the platform API."""
+    platform_url = normalize_platform_url(config.url)
+    api_key = config.api_key.strip()
+    if not platform_url or not api_key:
+        raise PlatformClientError("Platform URL and API key are required for risk upload.")
+
+    response = requests.post(
+        build_risk_url(platform_url),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=dict(payload),
+        timeout=timeout_seconds,
+    )
+    if response.status_code < _HTTP_SUCCESS_MIN or response.status_code >= _HTTP_SUCCESS_MAX:
+        message = response.text.strip()[:300]
+        raise PlatformClientError(
+            f"Platform risk upload failed (HTTP {response.status_code}): {message}"
+        )
+
+    try:
+        body = response.json()
+    except ValueError:
+        return {}
+
+    return body if isinstance(body, dict) else {}
+
+
+def post_platform_coverage_gaps(
+    config: PlatformRuntimeConfig,
+    payload: Mapping[str, Any],
+    *,
+    timeout_seconds: float = 15.0,
+) -> dict[str, Any]:
+    """Upload a coverage-gaps payload to the platform API."""
+    platform_url = normalize_platform_url(config.url)
+    api_key = config.api_key.strip()
+    if not platform_url or not api_key:
+        raise PlatformClientError("Platform URL and API key are required for coverage-gaps upload.")
+
+    response = requests.post(
+        build_coverage_gaps_url(platform_url),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=dict(payload),
+        timeout=timeout_seconds,
+    )
+    if response.status_code < _HTTP_SUCCESS_MIN or response.status_code >= _HTTP_SUCCESS_MAX:
+        message = response.text.strip()[:300]
+        raise PlatformClientError(
+            f"Platform coverage-gaps upload failed (HTTP {response.status_code}): {message}"
+        )
+
+    try:
+        body = response.json()
+    except ValueError:
+        return {}
+
+    return body if isinstance(body, dict) else {}
+
+
+def post_platform_fix(
+    config: PlatformRuntimeConfig,
+    payload: Mapping[str, Any],
+    *,
+    timeout_seconds: float = 15.0,
+) -> dict[str, Any]:
+    """Upload a fix payload to the platform API."""
+    platform_url = normalize_platform_url(config.url)
+    api_key = config.api_key.strip()
+    if not platform_url or not api_key:
+        raise PlatformClientError("Platform URL and API key are required for fix upload.")
+
+    response = requests.post(
+        build_fixes_url(platform_url),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=dict(payload),
+        timeout=timeout_seconds,
+    )
+    if response.status_code < _HTTP_SUCCESS_MIN or response.status_code >= _HTTP_SUCCESS_MAX:
+        message = response.text.strip()[:300]
+        raise PlatformClientError(
+            f"Platform fix upload failed (HTTP {response.status_code}): {message}"
+        )
+
+    try:
+        body = response.json()
+    except ValueError:
+        return {}
+
+    return body if isinstance(body, dict) else {}
+
+
+def post_platform_routes(
+    config: PlatformRuntimeConfig,
+    payload: Mapping[str, Any],
+    *,
+    timeout_seconds: float = 15.0,
+) -> dict[str, Any]:
+    """Upload a routes payload to the platform API."""
+    platform_url = normalize_platform_url(config.url)
+    api_key = config.api_key.strip()
+    if not platform_url or not api_key:
+        raise PlatformClientError("Platform URL and API key are required for routes upload.")
+
+    response = requests.post(
+        build_routes_url(platform_url),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=dict(payload),
+        timeout=timeout_seconds,
+    )
+    if response.status_code < _HTTP_SUCCESS_MIN or response.status_code >= _HTTP_SUCCESS_MAX:
+        message = response.text.strip()[:300]
+        raise PlatformClientError(
+            f"Platform routes upload failed (HTTP {response.status_code}): {message}"
+        )
+
+    try:
+        body = response.json()
+    except ValueError:
+        return {}
+
+    return body if isinstance(body, dict) else {}
+
+
+def post_platform_doc_coverage(
+    config: PlatformRuntimeConfig,
+    payload: Mapping[str, Any],
+    *,
+    timeout_seconds: float = 15.0,
+) -> dict[str, Any]:
+    """Upload a doc-coverage payload to the platform API."""
+    platform_url = normalize_platform_url(config.url)
+    api_key = config.api_key.strip()
+    if not platform_url or not api_key:
+        raise PlatformClientError("Platform URL and API key are required for doc-coverage upload.")
+
+    response = requests.post(
+        build_doc_coverage_url(platform_url),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=dict(payload),
+        timeout=timeout_seconds,
+    )
+    if response.status_code < _HTTP_SUCCESS_MIN or response.status_code >= _HTTP_SUCCESS_MAX:
+        message = response.text.strip()[:300]
+        raise PlatformClientError(
+            f"Platform doc-coverage upload failed (HTTP {response.status_code}): {message}"
+        )
+
+    try:
+        body = response.json()
+    except ValueError:
+        return {}
+
+    return body if isinstance(body, dict) else {}
+
+
+def build_prompts_url(platform_url: str) -> str:
+    """Build the platform prompts API URL."""
+    return _join_platform_path(platform_url, _PROMPTS_PATH)
+
+
+def post_platform_prompts(
+    config: PlatformRuntimeConfig,
+    records: list[dict[str, Any]],
+    *,
+    timeout_seconds: float = 15.0,
+) -> dict[str, Any]:
+    """Upload prompt records to the platform API."""
+    platform_url = normalize_platform_url(config.url)
+    api_key = config.api_key.strip()
+    if not platform_url or not api_key:
+        raise PlatformClientError("Platform URL and API key are required for prompts upload.")
+
+    response = requests.post(
+        build_prompts_url(platform_url),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={"records": records},
+        timeout=timeout_seconds,
+    )
+    if response.status_code < _HTTP_SUCCESS_MIN or response.status_code >= _HTTP_SUCCESS_MAX:
+        message = response.text.strip()[:300]
+        raise PlatformClientError(
+            f"Platform prompts upload failed (HTTP {response.status_code}): {message}"
+        )
+
+    try:
+        body = response.json()
+    except ValueError:
+        return {}
+
+    return body if isinstance(body, dict) else {}
+
+
+def get_platform_prompts(
+    config: PlatformRuntimeConfig,
+    *,
+    limit: int = 50,
+    model: str | None = None,
+    template: str | None = None,
+    timeout_seconds: float = 15.0,
+) -> list[dict[str, Any]]:
+    """Query prompt records from the platform API."""
+    platform_url = normalize_platform_url(config.url)
+    api_key = config.api_key.strip()
+    if not platform_url or not api_key:
+        raise PlatformClientError("Platform URL and API key are required for prompts query.")
+
+    params: dict[str, str | int] = {"limit": limit}
+    if model:
+        params["model"] = model
+    if template:
+        params["template"] = template
+
+    response = requests.get(
+        build_prompts_url(platform_url),
+        headers={"Authorization": f"Bearer {api_key}"},
+        params=params,
+        timeout=timeout_seconds,
+    )
+    if response.status_code < _HTTP_SUCCESS_MIN or response.status_code >= _HTTP_SUCCESS_MAX:
+        message = response.text.strip()[:300]
+        raise PlatformClientError(
+            f"Platform prompts query failed (HTTP {response.status_code}): {message}"
+        )
+
+    try:
+        body = response.json()
+    except ValueError:
+        return []
+
+    if isinstance(body, list):
+        return body
+    if isinstance(body, dict):
+        records = body.get("records", [])
+        return records if isinstance(records, list) else []
+    return []

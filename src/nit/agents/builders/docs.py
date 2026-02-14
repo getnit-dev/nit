@@ -6,20 +6,19 @@ This agent (task 4.1):
 3. Identifies new functions, modified signatures, removed endpoints
 4. Detects doc framework (Sphinx, TypeDoc, Doxygen, JSDoc, GoDoc, RustDoc)
 5. Generates documentation comments in target framework format
-6. Detects semantic mismatches between existing docs and code
-7. Optionally writes generated docs back to source files or output directory
-8. Returns generated docs or reports outdated docs (check mode)
+6. Returns generated docs or reports outdated docs (check mode)
 """
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import logging
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
-from pathlib import Path, PurePath
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from nit.adapters.registry import get_registry
@@ -29,10 +28,7 @@ from nit.llm.prompts.doc_generation import (
     DocChange,
     DocGenerationContext,
     build_doc_generation_messages,
-    build_mismatch_detection_messages,
 )
-from nit.memory.global_memory import GlobalMemory
-from nit.memory.helpers import get_memory_context, inject_memory_into_messages, record_outcome
 from nit.memory.store import MemoryStore
 from nit.parsing.languages import extract_from_file
 from nit.parsing.treesitter import detect_language
@@ -102,26 +98,6 @@ class FileDocState:
 
 
 @dataclass
-class DocMismatch:
-    """A semantic mismatch between documentation and code."""
-
-    function_name: str
-    """Name of the function/class/method."""
-
-    file_path: str
-    """File path where the mismatch was found."""
-
-    mismatch_type: str
-    """Type: 'semantic_drift', 'missing_param', 'wrong_return', 'stale_reference'."""
-
-    description: str
-    """Human-readable description of the mismatch."""
-
-    severity: str = "warning"
-    """Severity: 'error' or 'warning'."""
-
-
-@dataclass
 class DocBuildTask(TaskInput):
     """Task input for generating documentation."""
 
@@ -147,6 +123,17 @@ class DocBuildTask(TaskInput):
 
 
 @dataclass
+class DocMismatch:
+    """Detected mismatch between code and documentation."""
+
+    function_name: str
+    file_path: str
+    mismatch_type: str  # e.g. "missing_param", "wrong_return", "semantic_drift"
+    description: str
+    severity: str = "warning"
+
+
+@dataclass
 class DocBuildResult:
     """Result of documentation generation."""
 
@@ -162,14 +149,14 @@ class DocBuildResult:
     outdated: bool
     """Whether documentation was outdated."""
 
-    mismatches: list[DocMismatch] = field(default_factory=list)
-    """Semantic mismatches between documentation and code."""
-
     errors: list[str] = field(default_factory=list)
     """Any errors encountered."""
 
+    mismatches: list[DocMismatch] = field(default_factory=list)
+    """Detected mismatches between code and documentation."""
+
     files_written: list[str] = field(default_factory=list)
-    """Files that were written back to (source or output dir)."""
+    """Files written during documentation generation."""
 
 
 class DocBuilder(BaseAgent):
@@ -187,7 +174,6 @@ class DocBuilder(BaseAgent):
         *,
         max_tokens: int = 4096,
         docs_config: DocsConfig | None = None,
-        enable_memory: bool = True,
     ) -> None:
         """Initialize the DocBuilder agent.
 
@@ -195,15 +181,16 @@ class DocBuilder(BaseAgent):
             llm_engine: The LLM engine to use for generation.
             project_root: Root directory of the project.
             max_tokens: Maximum tokens for doc generation.
-            docs_config: Documentation generation configuration.
-            enable_memory: Whether to use GlobalMemory for pattern learning.
+            docs_config: Optional documentation configuration.
         """
         self._llm = llm_engine
         self._root = project_root
+        self._max_tokens = max_tokens
         self._docs_config = docs_config
-        self._max_tokens = docs_config.max_tokens if docs_config else max_tokens
         self._registry = get_registry()
-        self._global_memory = GlobalMemory(project_root) if enable_memory else None
+
+        if docs_config is not None:
+            self._max_tokens = docs_config.max_tokens
 
         # Doc state memory store
         self._doc_state_store: MemoryStore[dict[str, dict[str, Any]]] = MemoryStore(
@@ -303,11 +290,14 @@ class DocBuilder(BaseAgent):
                 # Scan all supported source files in project
                 source_files = self._discover_source_files()
 
-            # Apply exclude patterns from config
+            # Filter out files matching exclude patterns from docs_config
             if self._docs_config and self._docs_config.exclude_patterns:
-                patterns = self._docs_config.exclude_patterns
                 source_files = [
-                    f for f in source_files if not any(PurePath(f).match(pat) for pat in patterns)
+                    f
+                    for f in source_files
+                    if not any(
+                        fnmatch.fnmatch(f, pat) for pat in self._docs_config.exclude_patterns
+                    )
                 ]
 
             for file_path in source_files:
@@ -326,14 +316,6 @@ class DocBuilder(BaseAgent):
             has_errors = any(r.errors for r in results)
             status = TaskStatus.FAILED if has_errors else TaskStatus.COMPLETED
 
-            total_docs = sum(len(r.generated_docs) for r in results)
-            record_outcome(
-                self._global_memory,
-                successful=not has_errors,
-                domain="doc_generation",
-                context_dict={"domain": "docs", "docs_generated": total_docs},
-            )
-
             return TaskOutput(
                 status=status,
                 result={"results": [self._result_to_dict(r) for r in results]},
@@ -342,13 +324,6 @@ class DocBuilder(BaseAgent):
 
         except Exception as e:
             logger.exception("Documentation generation failed")
-            record_outcome(
-                self._global_memory,
-                successful=False,
-                domain="doc_generation",
-                context_dict={"domain": "docs"},
-                error_message=str(e),
-            )
             return TaskOutput(
                 status=TaskStatus.FAILED,
                 errors=[f"Documentation generation failed: {e}"],
@@ -395,13 +370,12 @@ class DocBuilder(BaseAgent):
         # Parse source file
         parse_result = extract_from_file(str(source_path))
 
-        # Detect doc framework (CLI override > config override > auto-detect)
-        if doc_framework_override:
-            doc_framework = doc_framework_override
-        elif self._docs_config and self._docs_config.framework:
-            doc_framework = self._docs_config.framework
-        else:
-            doc_framework = self._detect_doc_framework(language)
+        # Detect doc framework
+        doc_framework = (
+            doc_framework_override
+            if doc_framework_override
+            else self._detect_doc_framework(language)
+        )
 
         # Get previous state
         prev_state = self._doc_states.get(file_path)
@@ -412,15 +386,7 @@ class DocBuilder(BaseAgent):
         # Compare states and detect changes (task 4.1.2)
         changes = self._detect_changes(prev_state, current_state)
 
-        # Run mismatch detection for documented functions
-        mismatches: list[DocMismatch] = []
-        check_mismatch = self._docs_config.check_mismatch if self._docs_config else True
-        if check_mismatch and self._llm is not None:
-            mismatches = await self._check_mismatches(
-                file_path, language, doc_framework, current_state, source_path
-            )
-
-        if not changes and not mismatches:
+        if not changes:
             logger.info("No documentation changes detected for %s", file_path)
             return DocBuildResult(
                 file_path=file_path,
@@ -430,8 +396,6 @@ class DocBuilder(BaseAgent):
             )
 
         logger.info("Detected %d documentation changes in %s", len(changes), file_path)
-        if mismatches:
-            logger.info("Detected %d doc/code mismatches in %s", len(mismatches), file_path)
 
         # If check-only mode, return without generating
         if check_only:
@@ -439,8 +403,7 @@ class DocBuilder(BaseAgent):
                 file_path=file_path,
                 changes=changes,
                 generated_docs={},
-                outdated=bool(changes),
-                mismatches=mismatches,
+                outdated=True,
             )
 
         # Generate documentation
@@ -451,28 +414,11 @@ class DocBuilder(BaseAgent):
         # Update doc state
         self._update_doc_state(file_path, current_state, generated_docs)
 
-        # Write-back: source files and/or output directory
-        files_written: list[str] = []
-        write_to_source = self._docs_config.write_to_source if self._docs_config else False
-        output_dir = self._docs_config.output_dir if self._docs_config else ""
-
-        if write_to_source and generated_docs:
-            written = self._write_docs_to_source(
-                source_path, language, generated_docs, current_state
-            )
-            files_written.extend(written)
-
-        if output_dir and generated_docs:
-            written = self._write_docs_to_output_dir(file_path, generated_docs, output_dir)
-            files_written.extend(written)
-
         return DocBuildResult(
             file_path=file_path,
             changes=changes,
             generated_docs=generated_docs,
             outdated=True,
-            mismatches=mismatches,
-            files_written=files_written,
         )
 
     def _discover_source_files(self) -> list[str]:
@@ -756,7 +702,6 @@ class DocBuilder(BaseAgent):
             Map of function name to generated doc comment.
         """
         source_code = source_path.read_text(encoding="utf-8")
-        style = self._docs_config.style if self._docs_config else ""
 
         doc_context = DocGenerationContext(
             changes=changes,
@@ -764,23 +709,20 @@ class DocBuilder(BaseAgent):
             language=language,
             source_path=file_path,
             source_code=source_code,
-            style_preference=style,
         )
 
         messages = build_doc_generation_messages(doc_context)
-
-        memory_context = get_memory_context(
-            self._global_memory,
-            known_filter_key="domain",
-            failed_filter_key="domain",
-            filter_value="docs",
-        )
-        inject_memory_into_messages(messages, memory_context)
 
         request = GenerationRequest(
             messages=messages,
             max_tokens=self._max_tokens,
             temperature=0.3,
+            metadata={
+                "nit_source_file": file_path,
+                "nit_template_name": "doc_generation",
+                "nit_builder_name": self.name,
+                "nit_framework": doc_framework,
+            },
         )
 
         try:
@@ -861,6 +803,7 @@ class DocBuilder(BaseAgent):
             ],
             "generated_docs": result.generated_docs,
             "outdated": result.outdated,
+            "errors": result.errors,
             "mismatches": [
                 {
                     "function_name": m.function_name,
@@ -872,247 +815,112 @@ class DocBuilder(BaseAgent):
                 for m in result.mismatches
             ],
             "files_written": result.files_written,
-            "errors": result.errors,
         }
 
-    # ------------------------------------------------------------------
-    # Mismatch detection
-    # ------------------------------------------------------------------
-
-    async def _check_mismatches(
-        self,
-        file_path: str,
-        language: str,
-        doc_framework: str,
-        current_state: FileDocState,
-        source_path: Path,
-    ) -> list[DocMismatch]:
-        """Detect semantic mismatches between existing docs and code.
-
-        Checks functions/classes that already have documentation to see if
-        the docs are semantically accurate (correct params, returns, etc.).
-
-        Args:
-            file_path: Relative file path.
-            language: Programming language.
-            doc_framework: Documentation framework.
-            current_state: Current parsed state of the file.
-            source_path: Full path to source file.
-
-        Returns:
-            List of detected mismatches.
-        """
-        # Collect documented functions/classes for mismatch checking
-        documented: list[tuple[str, str, str]] = []  # (name, signature, docstring)
-        for name, func in current_state.functions.items():
-            if func.docstring:
-                documented.append((name, func.signature, func.docstring))
-        for name, cls in current_state.classes.items():
-            if cls.docstring:
-                documented.append((name, cls.signature, cls.docstring))
-
-        if not documented:
-            return []
-
-        source_code = source_path.read_text(encoding="utf-8")
-
-        messages = build_mismatch_detection_messages(
-            documented_items=documented,
-            language=language,
-            doc_framework=doc_framework,
-            source_code=source_code,
-            source_path=file_path,
-        )
-
-        inject_memory_into_messages(
-            messages,
-            get_memory_context(
-                self._global_memory,
-                known_filter_key="domain",
-                failed_filter_key="domain",
-                filter_value="docs",
-            ),
-        )
-
-        request = GenerationRequest(
-            messages=messages,
-            max_tokens=2048,
-            temperature=0.1,
-        )
-
-        try:
-            response = await self._llm.generate(request)
-            return self._parse_mismatch_response(response.text.strip(), file_path)
-        except LLMError as e:
-            logger.error("Mismatch detection failed for %s: %s", file_path, e)
-            return []
-
-    def _parse_mismatch_response(self, response_text: str, file_path: str) -> list[DocMismatch]:
+    def _parse_mismatch_response(self, response: str, file_path: str) -> list[DocMismatch]:
         """Parse LLM mismatch detection response into DocMismatch objects.
 
         Args:
-            response_text: Raw LLM output (expected JSON array).
-            file_path: File path for context.
+            response: Raw LLM response text (expected JSON array).
+            file_path: File path for the mismatches.
 
         Returns:
-            List of DocMismatch objects.
+            List of parsed DocMismatch objects.
         """
-        # Extract JSON array from response (may be wrapped in markdown code block)
-        cleaned = response_text.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            json_lines = [line for line in lines if not line.startswith("```")]
-            cleaned = "\n".join(json_lines).strip()
-
+        text = response.strip()
+        # Handle markdown code blocks — need opening + content + closing lines
+        _min_code_block_lines = 3
+        if text.startswith("```"):
+            lines = text.split("\n")
+            text = "\n".join(lines[1:-1]) if len(lines) >= _min_code_block_lines else ""
         try:
-            items = json.loads(cleaned)
+            parsed = json.loads(text)
         except (json.JSONDecodeError, ValueError):
-            logger.debug("Could not parse mismatch response as JSON: %s", response_text[:200])
             return []
-
-        if not isinstance(items, list):
+        if not isinstance(parsed, list):
             return []
-
-        mismatches: list[DocMismatch] = []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            mismatches.append(
-                DocMismatch(
-                    function_name=str(item.get("function", "")),
-                    file_path=file_path,
-                    mismatch_type=str(item.get("type", "semantic_drift")),
-                    description=str(item.get("description", "")),
-                    severity=str(item.get("severity", "warning")),
-                )
+        return [
+            DocMismatch(
+                function_name=item.get("function", ""),
+                file_path=file_path,
+                mismatch_type=item.get("type", ""),
+                description=item.get("description", ""),
+                severity=item.get("severity", "warning"),
             )
-        return mismatches
-
-    # ------------------------------------------------------------------
-    # Write-back to source files
-    # ------------------------------------------------------------------
+            for item in parsed
+            if isinstance(item, dict)
+        ]
 
     def _write_docs_to_source(
         self,
-        source_path: Path,
+        source_file: Path,
         language: str,
-        generated_docs: dict[str, str],
-        current_state: FileDocState,
+        docs: dict[str, str],
+        state: FileDocState,
     ) -> list[str]:
         """Write generated documentation back into the source file.
 
         Args:
-            source_path: Full path to the source file.
+            source_file: Path to the source file.
             language: Programming language.
-            generated_docs: Map of function name to generated doc comment.
-            current_state: Current state with line numbers.
+            docs: Map of function name to doc comment.
+            state: Current file documentation state.
 
         Returns:
-            List of files written.
+            List of function names that were written.
         """
-        lines = source_path.read_text(encoding="utf-8").splitlines(keepends=True)
-        insertions: list[tuple[int, str]] = []
+        written: list[str] = []
+        lines = source_file.read_text(encoding="utf-8").splitlines(keepends=True)
 
-        for func_name, doc_comment in generated_docs.items():
-            state = current_state.functions.get(func_name) or current_state.classes.get(func_name)
-            if not state or state.line_number <= 0:
+        # Process functions in reverse line order to avoid offset issues
+        items: list[tuple[int, str, str]] = []
+        for name, doc in docs.items():
+            func_state = state.functions.get(name) or state.classes.get(name)
+            if func_state and func_state.line_number > 0:
+                items.append((func_state.line_number, name, doc))
+        items.sort(reverse=True)
+
+        for line_num, name, doc in items:
+            idx = line_num - 1  # 0-based
+            if idx < 0 or idx >= len(lines):
                 continue
+            if language == "python":
+                # Insert docstring after the def/class line
+                indent = "    "
+                doc_line = f'{indent}"""{doc}"""\n'
+                lines.insert(idx + 1, doc_line)
+            else:
+                # Insert comment above the function
+                lines.insert(idx, doc + "\n")
+            written.append(name)
 
-            # Line number is 1-based
-            target_line = state.line_number - 1
-            if target_line < 0 or target_line >= len(lines):
-                continue
-
-            formatted = self._format_doc_for_insertion(doc_comment, language, lines, target_line)
-            insertions.append((target_line, formatted))
-
-        if not insertions:
-            return []
-
-        # Apply insertions in reverse order to preserve line numbers
-        insertions.sort(key=lambda x: x[0], reverse=True)
-        for line_idx, doc_text in insertions:
-            lines.insert(line_idx, doc_text)
-
-        source_path.write_text("".join(lines), encoding="utf-8")
-        logger.info("Wrote documentation back to %s", source_path)
-        return [str(source_path)]
-
-    def _format_doc_for_insertion(
-        self,
-        doc_comment: str,
-        language: str,
-        lines: list[str],
-        target_line: int,
-    ) -> str:
-        """Format a doc comment for insertion into source code.
-
-        Args:
-            doc_comment: The raw doc comment text.
-            language: Programming language.
-            lines: Source file lines.
-            target_line: Line index where the function/class is defined.
-
-        Returns:
-            Formatted doc comment string ready for insertion.
-        """
-        # Detect indentation from the target line
-        if target_line < len(lines):
-            target = lines[target_line]
-            indent = target[: len(target) - len(target.lstrip())]
-        else:
-            indent = ""
-
-        if language == "python":
-            # Python: doc goes inside the function body, after the def line
-            body_indent = indent + "    "
-            doc_lines = doc_comment.strip().splitlines()
-            if len(doc_lines) == 1:
-                return f'{body_indent}"""{doc_lines[0]}"""\n'
-            formatted = f'{body_indent}"""{doc_lines[0]}\n'
-            for dline in doc_lines[1:]:
-                formatted += f"{body_indent}{dline}\n"
-            formatted += f'{body_indent}"""\n'
-            return formatted
-
-        # For other languages, doc goes above the function definition
-        doc_lines = doc_comment.strip().splitlines()
-        formatted_lines = [f"{indent}{dline}\n" for dline in doc_lines]
-        return "".join(formatted_lines)
-
-    # ------------------------------------------------------------------
-    # Write docs to output directory
-    # ------------------------------------------------------------------
+        source_file.write_text("".join(lines), encoding="utf-8")
+        return written
 
     def _write_docs_to_output_dir(
         self,
         file_path: str,
-        generated_docs: dict[str, str],
+        docs: dict[str, str],
         output_dir: str,
     ) -> list[str]:
-        """Write generated documentation as markdown to an output directory.
-
-        Creates one markdown file per source file, organized by directory structure.
+        """Write generated docs to markdown files in output directory.
 
         Args:
-            file_path: Relative source file path.
-            generated_docs: Map of function name to generated doc comment.
-            output_dir: Output directory path (relative to project root or absolute).
+            file_path: Source file path.
+            docs: Map of function name to doc comment.
+            output_dir: Output directory path.
 
         Returns:
-            List of files written.
+            List of written file paths.
         """
-        out_root = Path(output_dir) if Path(output_dir).is_absolute() else self._root / output_dir
-        # Mirror the source file path structure
-        source_stem = Path(file_path).with_suffix(".md")
-        out_file = out_root / source_stem
+        out_base = Path(output_dir)
+        source_p = Path(file_path)
+        out_file = out_base / source_p.with_suffix(".md")
         out_file.parent.mkdir(parents=True, exist_ok=True)
 
-        sections: list[str] = [f"# {Path(file_path).name}\n"]
-        for func_name, doc_comment in generated_docs.items():
-            sections.append(f"\n## `{func_name}`\n")
-            sections.append(f"\n```\n{doc_comment}\n```\n")
+        sections: list[str] = []
+        for name, doc in docs.items():
+            sections.append(f"## {name}\n\n{doc}\n")
 
         out_file.write_text("\n".join(sections), encoding="utf-8")
-        logger.info("Wrote documentation to %s", out_file)
         return [str(out_file)]
