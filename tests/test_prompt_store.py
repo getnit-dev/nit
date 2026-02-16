@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -121,6 +122,7 @@ class TestPromptRecorder:
         for _ in range(3):
             response = _make_response()
             ids.append(recorder.record(request, response, duration_ms=100))
+            time.sleep(0.02)  # Ensure distinct timestamps on Windows
 
         records = recorder.read_all()
         assert len(records) == 3

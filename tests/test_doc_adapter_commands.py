@@ -7,11 +7,16 @@ This module tests all of them to ensure consistent behaviour and coverage.
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+if sys.platform == "win32":
+    # Avoid ProactorEventLoop cleanup errors on Windows
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from nit.adapters.docs import doxygen_adapter as doxygen
 from nit.adapters.docs import godoc_adapter as godoc

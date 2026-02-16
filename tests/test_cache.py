@@ -19,10 +19,10 @@ class TestMemoryCache:
         assert cache.get("missing") is None
 
     def test_ttl_expiry(self) -> None:
-        cache: MemoryCache[str] = MemoryCache(ttl_seconds=0.05)
+        cache: MemoryCache[str] = MemoryCache(ttl_seconds=0.1)
         cache.put("k1", "v1")
         assert cache.get("k1") == "v1"
-        time.sleep(0.06)
+        time.sleep(0.2)
         assert cache.get("k1") is None
 
     def test_lru_eviction(self) -> None:
