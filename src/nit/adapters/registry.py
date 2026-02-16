@@ -15,13 +15,14 @@ from typing import TYPE_CHECKING
 
 import nit.adapters.docs as docs_package
 import nit.adapters.e2e as e2e_package
+import nit.adapters.mutation as mutation_package
 import nit.adapters.unit as unit_package
 
 if TYPE_CHECKING:
-    from nit.adapters.base import DocFrameworkAdapter, TestFrameworkAdapter
     from nit.models.profile import ProjectProfile
 
 from nit.adapters.base import DocFrameworkAdapter, TestFrameworkAdapter
+from nit.adapters.mutation.base import MutationTestingAdapter
 from nit.agents.detectors.signals import FrameworkCategory
 
 logger = logging.getLogger(__name__)
@@ -39,14 +40,16 @@ class AdapterRegistry:
         """Initialize the adapter registry and discover all available adapters."""
         self._test_adapters: dict[str, type[TestFrameworkAdapter]] = {}
         self._doc_adapters: dict[str, type[DocFrameworkAdapter]] = {}
+        self._mutation_adapters: dict[str, type[MutationTestingAdapter]] = {}
         self._discover_adapters()
 
     def _discover_adapters(self) -> None:
         """Discover all adapter classes by scanning the adapters package.
 
         Scans the ``nit.adapters.unit`` subpackage for unit test adapters,
-        ``nit.adapters.e2e`` for E2E test adapters, and
-        ``nit.adapters.docs`` for documentation adapters.
+        ``nit.adapters.e2e`` for E2E test adapters,
+        ``nit.adapters.docs`` for documentation adapters, and
+        ``nit.adapters.mutation`` for mutation testing adapters.
 
         Also discovers adapters registered via Python entry points for
         community-contributed adapter packages.
@@ -55,6 +58,7 @@ class AdapterRegistry:
         self._discover_test_adapters()
         self._discover_e2e_adapters()
         self._discover_doc_adapters()
+        self._discover_mutation_adapters()
 
         # Discover external adapters via entry points
         self._discover_entry_point_adapters()
@@ -119,12 +123,31 @@ class AdapterRegistry:
         except (ImportError, AttributeError) as exc:
             logger.debug("No doc adapters package found: %s", exc)
 
+    def _discover_mutation_adapters(self) -> None:
+        """Scan ``nit.adapters.mutation`` for ``MutationTestingAdapter`` subclasses."""
+        try:
+            for _, module_name, _ in pkgutil.iter_modules(mutation_package.__path__):
+                if module_name.startswith("_") or not module_name.endswith("_adapter"):
+                    continue
+
+                try:
+                    module = importlib.import_module(f"nit.adapters.mutation.{module_name}")
+                    self._register_adapters_from_module(module, "mutation")
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to import mutation adapter module %s: %s",
+                        module_name,
+                        exc,
+                    )
+        except (ImportError, AttributeError) as exc:
+            logger.debug("No mutation adapters package found: %s", exc)
+
     def _register_adapters_from_module(self, module: object, adapter_type: str) -> None:
         """Register all adapter classes found in *module*.
 
         Args:
             module: The Python module to scan for adapter classes.
-            adapter_type: Either ``"test"`` or ``"doc"``.
+            adapter_type: One of ``"test"``, ``"doc"``, or ``"mutation"``.
         """
         for attr_name in dir(module):
             attr = getattr(module, attr_name, None)
@@ -167,14 +190,32 @@ class AdapterRegistry:
                         attr_name,
                         exc,
                     )
+            elif adapter_type == "mutation":
+                if not issubclass(attr, MutationTestingAdapter):
+                    continue
+                if attr is MutationTestingAdapter:
+                    continue
+                try:
+                    mut_adapter_class: type[MutationTestingAdapter] = attr
+                    mut_instance = mut_adapter_class()
+                    adapter_name = mut_instance.name
+                    self._mutation_adapters[adapter_name] = mut_adapter_class
+                    logger.debug("Registered mutation adapter: %s", adapter_name)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to instantiate mutation adapter %s: %s",
+                        attr_name,
+                        exc,
+                    )
 
     def _discover_entry_point_adapters(self) -> None:
         """Discover adapters registered via Python entry points.
 
-        Scans three entry point groups:
+        Scans four entry point groups:
         - ``nit.adapters.unit`` for unit/integration test adapters
         - ``nit.adapters.e2e`` for E2E test adapters
         - ``nit.adapters.docs`` for documentation adapters
+        - ``nit.adapters.mutation`` for mutation testing adapters
 
         External packages can register adapters by adding entry points
         in their ``pyproject.toml`` or ``setup.py``.
@@ -200,6 +241,13 @@ class AdapterRegistry:
         except Exception as exc:
             logger.debug("Failed to load entry points for nit.adapters.docs: %s", exc)
 
+        # Discover mutation adapters from entry points
+        try:
+            for entry_point in importlib.metadata.entry_points(group="nit.adapters.mutation"):
+                self._load_entry_point_adapter(entry_point, "mutation")
+        except Exception as exc:
+            logger.debug("Failed to load entry points for nit.adapters.mutation: %s", exc)
+
     def _load_entry_point_adapter(
         self, entry_point: importlib.metadata.EntryPoint, adapter_type: str
     ) -> None:
@@ -207,7 +255,7 @@ class AdapterRegistry:
 
         Args:
             entry_point: The entry point to load.
-            adapter_type: Either ``"test"`` or ``"doc"``.
+            adapter_type: One of ``"test"``, ``"doc"``, or ``"mutation"``.
         """
         try:
             # Load the adapter class from the entry point
@@ -297,6 +345,41 @@ class AdapterRegistry:
                         exc,
                     )
 
+            elif adapter_type == "mutation":
+                if not issubclass(adapter_class, MutationTestingAdapter):
+                    logger.warning(
+                        "Entry point %s does not refer to a MutationTestingAdapter: %s",
+                        entry_point.name,
+                        adapter_class,
+                    )
+                    return
+
+                try:
+                    mut_instance = adapter_class()
+                    adapter_name = mut_instance.name
+
+                    if adapter_name in self._mutation_adapters:
+                        logger.warning(
+                            "Mutation adapter %s from entry point %s conflicts with "
+                            "existing adapter, skipping",
+                            adapter_name,
+                            entry_point.name,
+                        )
+                        return
+
+                    self._mutation_adapters[adapter_name] = adapter_class
+                    logger.info(
+                        "Registered mutation adapter %s from entry point %s",
+                        adapter_name,
+                        entry_point.name,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to instantiate mutation adapter from entry point %s: %s",
+                        entry_point.name,
+                        exc,
+                    )
+
         except Exception as exc:
             logger.warning(
                 "Failed to load entry point %s: %s",
@@ -340,6 +423,24 @@ class AdapterRegistry:
             logger.error("Failed to instantiate doc adapter %s: %s", name, exc)
             return None
 
+    def get_mutation_adapter(self, name: str) -> MutationTestingAdapter | None:
+        """Get a mutation testing adapter by name.
+
+        Args:
+            name: The tool name (e.g. ``"stryker"``, ``"mutmut"``, ``"pitest"``).
+
+        Returns:
+            An instance of the mutation adapter, or ``None`` if not found.
+        """
+        adapter_class = self._mutation_adapters.get(name)
+        if adapter_class is None:
+            return None
+        try:
+            return adapter_class()
+        except Exception as exc:
+            logger.error("Failed to instantiate mutation adapter %s: %s", name, exc)
+            return None
+
     def list_test_adapters(self) -> list[str]:
         """Return a list of all registered test adapter names."""
         return list(self._test_adapters.keys())
@@ -347,6 +448,10 @@ class AdapterRegistry:
     def list_doc_adapters(self) -> list[str]:
         """Return a list of all registered doc adapter names."""
         return list(self._doc_adapters.keys())
+
+    def list_mutation_adapters(self) -> list[str]:
+        """Return a list of all registered mutation adapter names."""
+        return list(self._mutation_adapters.keys())
 
     def select_adapters_for_profile(
         self,

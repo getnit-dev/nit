@@ -2548,7 +2548,22 @@ def _scan_diff_mode(path: str, base_ref: str, compare_ref: str | None, *, ci_mod
 @click.option(
     "--type",
     "test_type",
-    type=click.Choice(["unit", "e2e", "integration", "all"], case_sensitive=False),
+    type=click.Choice(
+        [
+            "unit",
+            "e2e",
+            "integration",
+            "accessibility",
+            "api",
+            "contract",
+            "graphql",
+            "migration",
+            "mutation",
+            "snapshot",
+            "all",
+        ],
+        case_sensitive=False,
+    ),
     default="all",
     help="Type of tests to generate.",
 )
@@ -2581,11 +2596,9 @@ def generate(
     Run 'nit analyze' first to see what will be generated.
 
     Options:
-      --type unit/e2e/integration/all
+      --type unit/e2e/integration/accessibility/api/contract/graphql/migration/mutation/snapshot/all
       --file PATH        Generate for specific file
       --coverage-target N  Target coverage percentage
-
-    Note: Currently a stub - implementation pending.
     """
     ctx = click.get_current_context()
     ci_mode = ctx.obj.get("ci", False) if ctx.obj else False
@@ -2648,7 +2661,7 @@ async def _run_generate(**kwargs: Any) -> None:
     """Run the test generation pipeline.
 
     Analyzes coverage gaps and generates tests using UnitBuilder,
-    E2EBuilder, and IntegrationBuilder agents.
+    E2EBuilder, IntegrationBuilder, and specialized builder agents.
     """
     from nit.agents.analyzers.coverage import CoverageAnalysisTask, CoverageAnalyzer
     from nit.agents.builders.e2e import E2EBuilder, E2ETask
@@ -2664,6 +2677,20 @@ async def _run_generate(**kwargs: Any) -> None:
     ci_mode: bool = kwargs.get("ci_mode", False)
 
     project_root = Path(path).resolve()
+
+    # Dispatch to specialized builders for non-standard test types
+    specialized_types = {
+        "accessibility",
+        "api",
+        "contract",
+        "graphql",
+        "migration",
+        "mutation",
+        "snapshot",
+    }
+    if test_type in specialized_types:
+        _run_specialized_generate(test_type, project_root, ci_mode)
+        return
 
     # Get adapters
     adapters = _get_test_adapters(profile)
@@ -2788,6 +2815,53 @@ async def _run_generate(**kwargs: Any) -> None:
     reporter.print_info(f"Generated {len(generated_files)} test file(s), {failed_count} failed")
     for f in generated_files:
         console.print(f"  [green]✓[/green] {f}")
+
+
+def _run_specialized_generate(test_type: str, project_root: Path, ci_mode: bool) -> None:
+    """Run a specialized builder to generate a test plan for a specific test type."""
+    builder_map: dict[str, tuple[str, str]] = {
+        "accessibility": (
+            "nit.agents.builders.accessibility",
+            "AccessibilityTestBuilder",
+        ),
+        "api": ("nit.agents.builders.api", "APITestBuilder"),
+        "contract": ("nit.agents.builders.contract", "ContractTestBuilder"),
+        "graphql": ("nit.agents.builders.graphql", "GraphQLTestBuilder"),
+        "migration": ("nit.agents.builders.migration", "MigrationTestBuilder"),
+        "mutation": ("nit.agents.builders.mutation", "MutationTestBuilder"),
+        "snapshot": ("nit.agents.builders.snapshot", "SnapshotTestBuilder"),
+    }
+
+    entry = builder_map.get(test_type)
+    if not entry:
+        reporter.print_error(f"Unknown specialized test type: {test_type}")
+        return
+
+    import importlib
+
+    module_path, class_name = entry
+    mod = importlib.import_module(module_path)
+    builder_cls = getattr(mod, class_name)
+    builder = builder_cls()
+
+    if not ci_mode:
+        reporter.print_info(f"Initialized {class_name} for {test_type} test generation")
+        reporter.print_info(f"Project root: {project_root}")
+
+    # The specialized builders produce test plans (not code).
+    # Display the builder's prompt template info so the user knows how to proceed.
+    if hasattr(builder, "get_prompt_template"):
+        template = builder.get_prompt_template()
+        reporter.print_success(
+            f"Ready: {class_name} with prompt template {type(template).__name__}"
+        )
+    elif hasattr(builder, "build_prompt_messages"):
+        reporter.print_success(f"Ready: {class_name} with prompt-based generation")
+
+    if not ci_mode:
+        reporter.print_info(
+            f"Use 'nit pick' to run the full pipeline with {test_type} analysis enabled."
+        )
 
 
 def _determine_test_output_path(
@@ -3084,11 +3158,15 @@ async def _run_pick_pipeline(config: PickPipelineConfig) -> None:
         raise click.Abort
 
 
-async def _run_pick_pipeline_with_result(config: PickPipelineConfig) -> PickPipelineResult:
+async def _run_pick_pipeline_with_result(
+    config: PickPipelineConfig,
+    output_format: str = "terminal",
+) -> PickPipelineResult:
     """Execute the full pick pipeline and return the result.
 
     Args:
         config: Pick pipeline configuration.
+        output_format: Report output format (terminal, json, markdown, junit, sarif).
 
     Returns:
         The pipeline execution result.
@@ -3096,9 +3174,9 @@ async def _run_pick_pipeline_with_result(config: PickPipelineConfig) -> PickPipe
     pipeline = PickPipeline(config)
     result = await pipeline.run()
 
-    # Display results
+    # Display results based on format
     if not config.ci_mode:
-        _display_pick_results(result, config.fix_enabled)
+        _display_pick_result_formatted(result, config.fix_enabled, output_format)
 
     if not result.success:
         raise click.Abort
@@ -3184,6 +3262,78 @@ def _display_pick_results(result: PickPipelineResult, fix_enabled: bool) -> None
             reporter.print_error(f"  {error}")
 
 
+def _display_pick_result_formatted(
+    result: PickPipelineResult, fix_enabled: bool, output_format: str
+) -> None:
+    """Display pick results in the requested output format."""
+    if output_format == "terminal":
+        _display_pick_results(result, fix_enabled)
+        return
+
+    if output_format == "json":
+        from nit.agents.reporters.json_reporter import JSONReporter
+
+        extra = _pick_result_to_extra(result)
+        click.echo(JSONReporter().generate_string(extra=extra))
+
+    elif output_format == "markdown":
+        from nit.agents.reporters.markdown_reporter import MarkdownReporter
+
+        extra = _pick_result_to_extra(result)
+        click.echo(MarkdownReporter().generate_string(extra=extra))
+
+    elif output_format == "junit":
+        from nit.adapters.base import RunResult
+        from nit.agents.reporters.junit_xml import JUnitXMLReporter
+
+        run_result = RunResult(
+            passed=result.tests_passed,
+            failed=result.tests_failed,
+            skipped=max(
+                result.tests_run - result.tests_passed - result.tests_failed - result.tests_errors,
+                0,
+            ),
+            errors=result.tests_errors,
+            duration_ms=0.0,
+            success=result.success,
+        )
+        click.echo(JUnitXMLReporter().generate_string(run_result))
+
+    elif output_format == "sarif":
+        from nit.agents.reporters.sarif import SARIFReporter
+
+        if result.security_report:
+            click.echo(SARIFReporter().generate_string(result.security_report))
+        else:
+            click.echo("{}")
+
+    elif output_format == "html":
+        # HTML handled elsewhere via --html flag on report command
+        _display_pick_results(result, fix_enabled)
+
+
+def _pick_result_to_extra(result: PickPipelineResult) -> dict[str, Any]:
+    """Build an extra dict from a PickPipelineResult for reporter consumption."""
+    extra: dict[str, Any] = {
+        "summary": {
+            "tests_run": result.tests_run,
+            "tests_passed": result.tests_passed,
+            "tests_failed": result.tests_failed,
+            "tests_errors": result.tests_errors,
+            "success": result.success,
+        },
+    }
+    if result.bugs_found:
+        extra["bugs"] = [
+            {"title": b.title, "severity": b.severity.value} for b in result.bugs_found
+        ]
+    if result.fixes_applied:
+        extra["fixes_applied"] = result.fixes_applied
+    if result.errors:
+        extra["errors"] = result.errors
+    return extra
+
+
 @cli.command()
 @click.option(
     "--path",
@@ -3247,7 +3397,10 @@ def _display_pick_results(result: PickPipelineResult, fix_enabled: bool) -> None
 @click.option(
     "--format",
     "output_format",
-    type=click.Choice(["terminal", "json", "html", "markdown"]),
+    type=click.Choice(
+        ["terminal", "json", "html", "markdown", "junit", "sarif"],
+        case_sensitive=False,
+    ),
     default=None,
     help="Report output format (uses config default if not specified).",
 )
@@ -3416,7 +3569,9 @@ def pick(**kwargs: Any) -> None:
 
     # Track execution time
     start_time = datetime.now(UTC)
-    result = asyncio.run(_run_pick_pipeline_with_result(pipeline_config))
+    result = asyncio.run(
+        _run_pick_pipeline_with_result(pipeline_config, output_format=output_format)
+    )
 
     if upload_report:
         pick_options = _PickOptions(
@@ -4309,6 +4464,12 @@ def _display_drift_report(report: Any) -> None:
     type=int,
     help="Maximum number of runs before stopping (default: unlimited).",
 )
+@click.option(
+    "--file-watch",
+    is_flag=True,
+    default=False,
+    help="Use file-change detection instead of schedule-based polling.",
+)
 def watch(**kwargs: Any) -> None:
     """Run tests on a schedule and optionally monitor coverage trends.
 
@@ -4318,10 +4479,9 @@ def watch(**kwargs: Any) -> None:
         nit watch --coverage                    # Include coverage monitoring
         nit watch --max-runs 5                  # Stop after 5 runs
         nit watch --test-command "pytest -x"    # Custom test command
+        nit watch --file-watch                  # Watch for file changes
     """
     import time as time_mod
-
-    from nit.agents.watchers.schedule import ScheduleWatcher
 
     path: str = kwargs["path"]
     interval: int = kwargs["interval"]
@@ -4331,8 +4491,15 @@ def watch(**kwargs: Any) -> None:
     test_command: str | None = kwargs.get("test_command")
     timeout: int = kwargs.get("timeout", 600)
     max_runs: int | None = kwargs.get("max_runs")
+    file_watch: bool = kwargs.get("file_watch", False)
 
     project_root = Path(path).resolve()
+
+    if file_watch:
+        _run_file_watch_mode(project_root, test_command, timeout, max_runs)
+        return
+
+    from nit.agents.watchers.schedule import ScheduleWatcher
 
     schedule_watcher = ScheduleWatcher(
         project_root,
@@ -4418,6 +4585,88 @@ def _display_watch_run(run_result: Any) -> None:
         )
         if run_result.error:
             console.print(f"  Error: {run_result.error}")
+
+
+def _run_file_watch_mode(
+    project_root: Path,
+    test_command: str | None,
+    timeout: int,
+    max_runs: int | None,
+) -> None:
+    """Run file-change-triggered watch mode using FileWatcher."""
+    import subprocess
+    import time as time_mod
+
+    from nit.agents.watchers.file_watch_ui import FileWatchUI
+    from nit.agents.watchers.file_watcher import FileWatchConfig, FileWatcher
+
+    max_display = 5
+    config = FileWatchConfig()
+    watcher = FileWatcher(project_root, config)
+    ui = FileWatchUI()
+
+    watcher.start()
+
+    console.print("[bold cyan]Starting file-watch mode[/bold cyan]")
+    console.print(f"  Monitoring: {project_root}")
+    console.print(f"  Patterns: {', '.join(config.watch_patterns)}")
+    if max_runs:
+        console.print(f"  Max runs: {max_runs}")
+    console.print("\nPress Ctrl+C to stop\n")
+
+    cmd = test_command or "pytest"
+    run_count = 0
+
+    try:
+        while max_runs is None or run_count < max_runs:
+            event = watcher.poll()
+            if event is None:
+                time_mod.sleep(config.poll_interval)
+                continue
+
+            run_count += 1
+            changed = [c.path for c in event.changes]
+            ui.update_changes(changed)
+            ui.update_status("RUNNING")
+            ui.render()
+
+            console.print(f"\n[bold]Run {run_count}[/bold] — {len(changed)} file(s) changed")
+            for ch in changed[:max_display]:
+                console.print(f"  {ch}")
+            if len(changed) > max_display:
+                console.print(f"  ... and {len(changed) - max_display} more")
+
+            test_args = cmd.split()
+            if event.affected_tests:
+                test_args = [*test_args, *event.affected_tests]
+
+            try:
+                proc = subprocess.run(
+                    test_args,
+                    cwd=str(project_root),
+                    timeout=timeout,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if proc.returncode == 0:
+                    ui.update_status("SUCCESS")
+                    ui.update_result("passed")
+                    console.print("  [green]Tests passed[/green]")
+                else:
+                    ui.update_status("FAILED")
+                    ui.update_result("failed")
+                    console.print(f"  [red]Tests failed (exit {proc.returncode})[/red]")
+            except subprocess.TimeoutExpired:
+                ui.update_status("FAILED")
+                ui.update_result("timeout")
+                console.print(f"  [red]Tests timed out after {timeout}s[/red]")
+
+            ui.render()
+
+    except KeyboardInterrupt:
+        watcher.stop()
+        console.print("\n[yellow]File-watch mode stopped[/yellow]")
 
 
 def _display_coverage_trend(trend_report: Any) -> None:
@@ -5885,6 +6134,67 @@ def prompts_analytics(path: str, days: int, *, as_json: bool) -> None:
                 str(tmpl_stats["avg_tokens"]),
             )
         console.print(tmpl_table)
+
+
+@prompts_group.command("sync")
+@click.option(
+    "--path",
+    default=".",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    help="Project root directory.",
+)
+@click.option("--limit", default=0, type=int, help="Maximum records to sync (0=default batch).")
+@click.option(
+    "--redact/--no-redact",
+    default=False,
+    help="Hash message content before uploading.",
+)
+def prompts_sync(path: str, limit: int, *, redact: bool) -> None:
+    """Sync prompt records to the platform.
+
+    Uploads unsynced prompt records to the nit platform for analytics
+    and team visibility.
+
+    Examples:
+        nit prompts sync
+        nit prompts sync --redact
+        nit prompts sync --limit 100
+    """
+    from nit.memory.prompt_store import get_prompt_recorder
+    from nit.memory.prompt_sync import PromptSyncer
+
+    project_root = Path(path).resolve()
+
+    try:
+        config = load_config(path)
+    except Exception as e:
+        reporter.print_error(f"Failed to load config: {e}")
+        raise click.Abort from e
+
+    if config.platform.normalized_mode != "byok":
+        reporter.print_error(
+            "Platform not configured. Add platform settings to .nit.yml "
+            "or run 'nit init' to configure."
+        )
+        raise click.Abort
+
+    recorder = get_prompt_recorder(project_root)
+    platform_config = PlatformRuntimeConfig(
+        url=config.platform.url,
+        api_key=config.platform.api_key,
+        mode=config.platform.mode,
+    )
+    syncer = PromptSyncer(
+        recorder,
+        platform_config,
+        redact_source=redact,
+    )
+
+    synced = syncer.sync(limit=limit)
+    if synced:
+        reporter.print_success(f"Synced {synced} prompt record(s) to platform")
+    else:
+        reporter.print_info("No new prompt records to sync")
 
 
 # ── Prompt CLI helpers ───────────────────────────────────────────

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from nit.agents.analyzers.database import MigrationAnalysisResult
+    from nit.llm.prompts.base import PromptTemplate
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,24 @@ class MigrationTestBuilder:
     - Idempotency (applying twice)
     - Schema validation (post-migration schema check)
     """
+
+    def get_prompt_template(self, framework: str = "alembic") -> PromptTemplate:
+        """Return the prompt template for migration test generation.
+
+        Args:
+            framework: The migration framework (``"alembic"`` or ``"django"``).
+
+        Returns:
+            A framework-specific migration test prompt template.
+        """
+        from nit.llm.prompts.migration_test_prompt import (
+            AlembicMigrationTemplate,
+            DjangoMigrationTemplate,
+        )
+
+        if framework == "django":
+            return DjangoMigrationTemplate()
+        return AlembicMigrationTemplate()
 
     def generate_test_plan(self, analysis: MigrationAnalysisResult) -> list[MigrationTestCase]:
         """Generate a list of migration test cases from the analysis result.

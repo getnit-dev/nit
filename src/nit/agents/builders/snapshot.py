@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from nit.agents.analyzers.snapshot import SnapshotAnalysisResult
+    from nit.llm.prompts.base import PromptTemplate
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,24 @@ class SnapshotTestBuilder:
     - Snapshot review tests for each active snapshot file
     - A general snapshot update test if snapshots exist
     """
+
+    def get_prompt_template(self, framework: str = "jest") -> PromptTemplate:
+        """Return the prompt template for snapshot test generation.
+
+        Args:
+            framework: The testing framework (``"jest"`` or ``"pytest"``).
+
+        Returns:
+            A framework-specific snapshot test prompt template.
+        """
+        from nit.llm.prompts.snapshot_test_prompt import (
+            JestSnapshotTemplate,
+            PytestSyrupyTemplate,
+        )
+
+        if framework == "pytest":
+            return PytestSyrupyTemplate()
+        return JestSnapshotTemplate()
 
     def generate_test_plan(self, analysis: SnapshotAnalysisResult) -> list[SnapshotTestCase]:
         """Generate a list of snapshot test cases from the analysis result.

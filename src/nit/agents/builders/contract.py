@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from nit.agents.analyzers.contract import ContractAnalysisResult
+    from nit.llm.prompts.base import PromptTemplate
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,28 @@ class ContractTestBuilder:
     - A consumer mock test (verifying the consumer sends the correct request)
     - A provider verification test (verifying the provider returns the expected response)
     """
+
+    def get_prompt_template(self, framework: str = "pytest") -> PromptTemplate:
+        """Return the prompt template for contract test generation.
+
+        Args:
+            framework: The testing framework (``"pytest"``, ``"jest"``, or ``"vitest"``).
+
+        Returns:
+            A framework-specific contract test prompt template.
+        """
+        from nit.llm.prompts.contract_test_prompt import (
+            JestPactTemplate,
+            PytestPactTemplate,
+            VitestPactTemplate,
+        )
+
+        templates = {
+            "jest": JestPactTemplate,
+            "vitest": VitestPactTemplate,
+        }
+        cls = templates.get(framework, PytestPactTemplate)
+        return cls()
 
     def generate_test_plan(self, analysis: ContractAnalysisResult) -> list[ContractTestCase]:
         """Generate a list of contract test cases from the analysis result.

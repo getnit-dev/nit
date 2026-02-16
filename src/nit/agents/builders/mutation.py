@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from nit.adapters.mutation.base import SurvivingMutant
     from nit.agents.analyzers.mutation import MutationAnalysisResult
+    from nit.llm.engine import LLMMessage
+    from nit.llm.prompts.mutation_test_prompt import MutationTestPromptContext
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +93,19 @@ class MutationTestBuilder:
     ``MutationTestCase`` for each surviving mutant describing what test
     to write and what strategy to use.
     """
+
+    def build_prompt_messages(self, context: MutationTestPromptContext) -> list[LLMMessage]:
+        """Build LLM messages for mutation test generation.
+
+        Args:
+            context: Context describing the surviving mutant to kill.
+
+        Returns:
+            A list of LLMMessage instances for the LLM.
+        """
+        from nit.llm.prompts.mutation_test_prompt import build_mutation_test_messages
+
+        return build_mutation_test_messages(context)
 
     def generate_test_plan(
         self,

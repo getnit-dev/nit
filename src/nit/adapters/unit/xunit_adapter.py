@@ -284,7 +284,7 @@ class XUnitAdapter(TestFrameworkAdapter):
         log_dir = project_path / _TRX_LOG_DIR
         log_dir.mkdir(parents=True, exist_ok=True)
         trx_path = log_dir / _TRX_LOG_FILE
-        logger_arg = f"trx;LogFileName={_TRX_LOG_DIR}/{_TRX_LOG_FILE}"
+        logger_arg = f"trx;LogFileName={_TRX_LOG_FILE}"
 
         cmd = ["dotnet", "test", str(target), "--logger", logger_arg]
         if test_files:

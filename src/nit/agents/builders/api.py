@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from nit.agents.analyzers.openapi import OpenAPIAnalysisResult, OpenAPIEndpoint
+    from nit.llm.prompts.base import PromptTemplate
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,30 @@ class APITestBuilder:
     scenarios. The generated plan can be fed into an LLM prompt template
     for full test code generation.
     """
+
+    def get_prompt_template(
+        self,
+        test_cases: list[APITestCase] | None = None,
+        base_url: str = "",
+        security_schemes: dict[str, str] | None = None,
+    ) -> PromptTemplate:
+        """Return the prompt template for API test generation.
+
+        Args:
+            test_cases: Test cases to embed in the template.
+            base_url: Base URL for the API under test.
+            security_schemes: Security scheme names mapped to their types.
+
+        Returns:
+            An ``APITestTemplate`` instance.
+        """
+        from nit.llm.prompts.api_test_prompt import APITestTemplate
+
+        return APITestTemplate(
+            test_cases=test_cases or [],
+            base_url=base_url,
+            security_schemes=security_schemes,
+        )
 
     def generate_test_plan(self, analysis: OpenAPIAnalysisResult) -> list[APITestCase]:
         """Generate a comprehensive test plan for all endpoints in the analysis.

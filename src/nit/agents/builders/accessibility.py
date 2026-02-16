@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from nit.agents.analyzers.accessibility import AccessibilityAnalysisResult
+    from nit.llm.prompts.base import PromptTemplate
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,24 @@ class AccessibilityTestBuilder:
     cases for axe scanning, keyboard navigation, ARIA labels, and focus
     management.
     """
+
+    def get_prompt_template(self, framework: str = "playwright") -> PromptTemplate:
+        """Return the prompt template for accessibility test generation.
+
+        Args:
+            framework: The testing framework (``"playwright"`` or ``"jest"``).
+
+        Returns:
+            A framework-specific accessibility test prompt template.
+        """
+        from nit.llm.prompts.accessibility_test_prompt import (
+            JestAxeTemplate,
+            PlaywrightAxeTemplate,
+        )
+
+        if framework == "jest":
+            return JestAxeTemplate()
+        return PlaywrightAxeTemplate()
 
     def generate_test_plan(
         self, analysis: AccessibilityAnalysisResult

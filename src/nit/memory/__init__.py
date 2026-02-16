@@ -18,6 +18,9 @@ from nit.memory.drift_baselines import DriftBaselinesManager
 from nit.memory.global_memory import GlobalMemory
 from nit.memory.package_memory import PackageMemory
 from nit.memory.package_memory_manager import PackageMemoryManager
+from nit.memory.prompt_analytics import PromptAnalytics
+from nit.memory.prompt_store import PromptRecorder, get_prompt_recorder
+from nit.memory.prompt_sync import PromptSyncer
 from nit.memory.store import MemoryStore
 
 __all__ = [
@@ -29,4 +32,8 @@ __all__ = [
     "MemoryStore",
     "PackageMemory",
     "PackageMemoryManager",
+    "PromptAnalytics",
+    "PromptRecorder",
+    "PromptSyncer",
+    "get_prompt_recorder",
 ]

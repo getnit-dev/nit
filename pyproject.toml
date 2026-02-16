@@ -34,7 +34,7 @@ dependencies = [
     "requests>=2.32",
     "tree-sitter>=0.23",
     "tree-sitter-language-pack>=0.3",
-    "sentence-transformers>=3.0.0",
+    "sentence-transformers>=5.2.2",
     "httpx>=0.28.0",
     "jsonschema>=4.23.0",
 ]
@@ -43,45 +43,32 @@ dependencies = [
 dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
-    "pytest-cov>=6.0",
+    "pytest-cov>=7.0.0",
+    "responses>=0.25",
     "ruff>=0.8",
     "black>=26.1.0",
     "mypy>=1.13",
     "pre-commit>=4.0",
+    "textual>=7.5.0",
+    "sentry-sdk>=2.0",
     "types-PyYAML>=6.0",
     "types-requests>=2.32",
     "types-jsonschema>=4.23.0",
 ]
 
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+]
+
 [project.scripts]
 nit = "nit.cli:cli"
 
-[project.entry-points."nit.adapters.unit"]
-vitest = "nit.adapters.unit.vitest_adapter:VitestAdapter"
-pytest = "nit.adapters.unit.pytest_adapter:PytestAdapter"
-catch2 = "nit.adapters.unit.catch2_adapter:Catch2Adapter"
-gtest = "nit.adapters.unit.gtest_adapter:GTestAdapter"
-kotest = "nit.adapters.unit.kotest_adapter:KotestAdapter"
-testify = "nit.adapters.unit.testify_adapter:TestifyAdapter"
-go-test = "nit.adapters.unit.go_test_adapter:GoTestAdapter"
-junit5 = "nit.adapters.unit.junit5_adapter:JUnit5Adapter"
-cargo-test = "nit.adapters.unit.cargo_test_adapter:CargoTestAdapter"
-xunit = "nit.adapters.unit.xunit_adapter:XUnitAdapter"
-jest = "nit.adapters.unit.jest_adapter:JestAdapter"
-mocha = "nit.adapters.unit.mocha_adapter:MochaAdapter"
-
-[project.entry-points."nit.adapters.e2e"]
-playwright = "nit.adapters.e2e.playwright_adapter:PlaywrightAdapter"
-cypress = "nit.adapters.e2e.cypress_adapter:CypressAdapter"
-
-[project.entry-points."nit.adapters.docs"]
-typedoc = "nit.adapters.docs.typedoc_adapter:TypeDocAdapter"
-sphinx = "nit.adapters.docs.sphinx_adapter:SphinxAdapter"
-doxygen = "nit.adapters.docs.doxygen_adapter:DoxygenAdapter"
-jsdoc = "nit.adapters.docs.jsdoc_adapter:JSDocAdapter"
-godoc = "nit.adapters.docs.godoc_adapter:GoDocAdapter"
-rustdoc = "nit.adapters.docs.rustdoc_adapter:RustDocAdapter"
-mkdocs = "nit.adapters.docs.mkdocs_adapter:MkDocsAdapter"
+# Built-in adapters are auto-discovered via package scanning.
+# External packages can register custom adapters via entry points in their own
+# pyproject.toml, e.g.:
+#   [project.entry-points."nit.adapters.unit"]
+#   my_adapter = "my_package.adapter:MyAdapter"
 
 [project.urls]
 Homepage = "https://getnit.dev"
@@ -148,13 +135,23 @@ select = [
 "**/adapters/e2e/auth.py" = ["S603"]
 "**/agents/analyzers/diff.py" = ["S603"]
 "**/agents/analyzers/risk.py" = ["S603"]
-"**/agents/pipelines/pick.py" = ["S603", "S607"]
+"**/agents/pipelines/pick.py" = ["S603", "S607", "PLR0912", "PLR0915", "PLC0415"]
 "**/agents/reporters/github_issue.py" = ["S603"]
 "**/agents/reporters/github_pr.py" = ["S603"]
 # CLI entry point: complexity from handling many user options
 "**/cli.py" = ["PLR0912", "PLR0915", "FBT001", "PLC0415", "S603", "S607"]
 # Schedule watcher: auto-detection requires multiple return paths
 "**/agents/watchers/schedule.py" = ["PLR0911"]
+# Registry: adapter-type dispatch requires many branches and returns
+"**/adapters/registry.py" = ["PLR0912", "PLR0911"]
+# Builders: lazy imports to avoid circular dependencies
+"**/agents/builders/accessibility.py" = ["PLC0415"]
+"**/agents/builders/api.py" = ["PLC0415"]
+"**/agents/builders/contract.py" = ["PLC0415"]
+"**/agents/builders/graphql.py" = ["PLC0415"]
+"**/agents/builders/migration.py" = ["PLC0415"]
+"**/agents/builders/mutation.py" = ["PLC0415"]
+"**/agents/builders/snapshot.py" = ["PLC0415"]
 # Template adapters: intentionally show various patterns for learning purposes
 "src/nit/adapters/unit/template_adapter.py" = ["TC003", "SIM103", "PLC0415", "PTH123", "S110", "SIM102", "ERA001", "ARG002", "PERF401"]
 "src/nit/adapters/docs/template_adapter.py" = ["TC003", "SIM103", "PLC0415", "PTH123", "S110", "SIM102", "ERA001", "ARG002", "PERF401"]

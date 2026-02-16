@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from nit.agents.analyzers.graphql import GraphQLSchemaAnalysis
+    from nit.llm.prompts.base import PromptTemplate
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,12 @@ class GraphQLTestBuilder:
     covering execution, input validation, authorization, and error handling.
     Subscriptions receive execution and error handling tests.
     """
+
+    def get_prompt_template(self) -> PromptTemplate:
+        """Return the prompt template for GraphQL test generation."""
+        from nit.llm.prompts.graphql_test_prompt import GraphQLTestTemplate
+
+        return GraphQLTestTemplate()
 
     def generate_test_plan(self, analysis: GraphQLSchemaAnalysis) -> list[GraphQLTestCase]:
         """Generate test cases for all operations in the schema analysis.

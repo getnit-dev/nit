@@ -71,13 +71,20 @@ from nit.utils.git import get_default_branch
 if TYPE_CHECKING:
     from nit.adapters.base import RunResult
     from nit.adapters.coverage.base import CoverageReport
+    from nit.agents.analyzers.accessibility import AccessibilityAnalysisResult
     from nit.agents.analyzers.code import CodeMap
+    from nit.agents.analyzers.contract import ContractAnalysisResult
+    from nit.agents.analyzers.database import MigrationAnalysisResult
     from nit.agents.analyzers.flow_mapping import FlowMappingResult
+    from nit.agents.analyzers.graphql import GraphQLSchemaAnalysis
     from nit.agents.analyzers.integration_deps import IntegrationDependencyReport
+    from nit.agents.analyzers.mutation import MutationAnalysisResult
+    from nit.agents.analyzers.openapi import OpenAPIAnalysisResult
     from nit.agents.analyzers.pattern import ConventionProfile
     from nit.agents.analyzers.risk import RiskReport
     from nit.agents.analyzers.security import SecurityReport
     from nit.agents.analyzers.semantic_gap import SemanticGap
+    from nit.agents.analyzers.snapshot import SnapshotAnalysisResult
     from nit.models.route import RouteDiscoveryResult
 
 logger = logging.getLogger(__name__)
@@ -203,6 +210,28 @@ class PickPipelineResult:
 
     llm_usage_profile: LLMUsageProfile | None = None
     """Detected LLM/AI SDK usage locations."""
+
+    # Specialized analysis results
+    accessibility_report: AccessibilityAnalysisResult | None = None
+    """Accessibility analysis findings."""
+
+    openapi_report: OpenAPIAnalysisResult | None = None
+    """OpenAPI/REST API analysis findings."""
+
+    graphql_report: GraphQLSchemaAnalysis | None = None
+    """GraphQL schema analysis findings."""
+
+    contract_report: ContractAnalysisResult | None = None
+    """Pact contract analysis findings."""
+
+    migration_report: MigrationAnalysisResult | None = None
+    """Database migration analysis findings."""
+
+    snapshot_report: SnapshotAnalysisResult | None = None
+    """Snapshot testing analysis findings."""
+
+    mutation_report: MutationAnalysisResult | None = None
+    """Mutation testing analysis findings."""
 
     success: bool = True
     errors: list[str] = field(default_factory=list)
@@ -346,6 +375,9 @@ class PickPipeline:
         # Steps 5-6: Deep analysis (code patterns, risk, semantic gaps)
         with start_span(op="step.analysis", description="Deep analysis"):
             await self._run_deep_analysis_steps(tracker, profile, result)
+
+        # Run specialized domain analyzers (non-blocking, best-effort)
+        await self._run_specialized_analyzers(result)
 
         # Steps 7-8: Fix generation and application
         with start_span(op="step.fixes", description="Fix generation"):
@@ -954,6 +986,113 @@ class PickPipeline:
                     reporter.print_security_summary(result.security_report)
         except Exception as exc:
             logger.debug("Security analysis error: %s", exc)
+
+    async def _run_specialized_analyzers(self, result: PickPipelineResult) -> None:
+        """Run domain-specific analyzers (accessibility, API, GraphQL, etc.).
+
+        These are best-effort: failures are logged but don't block the pipeline.
+        """
+        root = self.config.project_root
+
+        try:
+            from nit.agents.analyzers.accessibility import (
+                analyze_accessibility,
+                detect_frontend_project,
+            )
+
+            if detect_frontend_project(root):
+                a11y = analyze_accessibility(root)
+                if a11y.routes:
+                    result.accessibility_report = a11y
+                    if not self.config.ci_mode:
+                        reporter.print_info(f"Accessibility: {len(a11y.routes)} route(s) found")
+        except Exception as exc:
+            logger.debug("Accessibility analysis skipped: %s", exc)
+
+        try:
+            from nit.agents.analyzers.openapi import (
+                analyze_openapi_spec,
+                detect_openapi_specs,
+            )
+
+            specs = detect_openapi_specs(root)
+            if specs:
+                api_result = analyze_openapi_spec(specs[0])
+                if api_result.total_endpoints > 0:
+                    result.openapi_report = api_result
+                    if not self.config.ci_mode:
+                        reporter.print_info(f"OpenAPI: {api_result.total_endpoints} endpoint(s)")
+        except Exception as exc:
+            logger.debug("OpenAPI analysis skipped: %s", exc)
+
+        try:
+            from nit.agents.analyzers.graphql import (
+                analyze_graphql_schema,
+                detect_graphql_schemas,
+            )
+
+            schemas = detect_graphql_schemas(root)
+            if schemas:
+                gql = analyze_graphql_schema(schemas[0])
+                if gql.queries or gql.mutations:
+                    result.graphql_report = gql
+                    if not self.config.ci_mode:
+                        reporter.print_info(
+                            f"GraphQL: {len(gql.queries)} queries, "
+                            f"{len(gql.mutations)} mutations"
+                        )
+        except Exception as exc:
+            logger.debug("GraphQL analysis skipped: %s", exc)
+
+        try:
+            from nit.agents.analyzers.contract import (
+                analyze_contracts,
+                detect_contract_files,
+            )
+
+            pacts = detect_contract_files(root)
+            if pacts:
+                contracts = analyze_contracts(root)
+                if contracts.contracts:
+                    result.contract_report = contracts
+                    if not self.config.ci_mode:
+                        reporter.print_info(f"Contracts: {len(contracts.contracts)} contract(s)")
+        except Exception as exc:
+            logger.debug("Contract analysis skipped: %s", exc)
+
+        try:
+            from nit.agents.analyzers.database import (
+                analyze_migrations,
+                detect_migration_framework,
+            )
+
+            framework = detect_migration_framework(root)
+            if framework:
+                migrations = analyze_migrations(root)
+                if migrations.migrations:
+                    result.migration_report = migrations
+                    if not self.config.ci_mode:
+                        reporter.print_info(
+                            f"Migrations: {len(migrations.migrations)} migration(s)"
+                        )
+        except Exception as exc:
+            logger.debug("Migration analysis skipped: %s", exc)
+
+        try:
+            from nit.agents.analyzers.snapshot import (
+                analyze_snapshots,
+                detect_snapshot_framework,
+            )
+
+            snap_framework = detect_snapshot_framework(root)
+            if snap_framework:
+                snapshots = analyze_snapshots(root)
+                if snapshots.snapshot_files:
+                    result.snapshot_report = snapshots
+                    if not self.config.ci_mode:
+                        reporter.print_info(f"Snapshots: {snapshots.total_snapshots} snapshot(s)")
+        except Exception as exc:
+            logger.debug("Snapshot analysis skipped: %s", exc)
 
     async def _analyze_risk(
         self,
