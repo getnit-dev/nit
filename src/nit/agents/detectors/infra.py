@@ -168,7 +168,7 @@ def _detect_github_actions(root: Path) -> list[CIConfig]:
     configs: list[CIConfig] = []
     for wf in sorted(workflows_dir.iterdir()):
         if wf.is_file() and wf.suffix in (".yml", ".yaml"):
-            rel = str(wf.relative_to(root))
+            rel = wf.relative_to(root).as_posix()
             text = _read_text_safe(wf)
             test_cmds = _extract_test_commands(text) if text else []
             configs.append(
@@ -287,7 +287,7 @@ def _detect_shell_scripts(root: Path, skip_dirs: frozenset[str]) -> list[ScriptI
     if scripts_dir.is_dir() and "scripts" not in skip_dirs:
         found.extend(
             ScriptInfo(
-                file_path=str(child.relative_to(root)),
+                file_path=child.relative_to(root).as_posix(),
                 script_type="shell",
                 name=child.name,
             )

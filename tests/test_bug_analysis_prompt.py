@@ -270,3 +270,31 @@ def test_bug_reproduction_build_sections_non_bug_context() -> None:
     mock_context = MagicMock()
     sections = prompt._build_sections(mock_context)
     assert sections == []
+
+
+# ── _build_sections with BugAnalysisContext (isinstance branch) ──
+
+
+def test_bug_analysis_build_sections_with_bug_context() -> None:
+    """Test BugAnalysisPrompt._build_sections routes through isinstance check."""
+    prompt = BugAnalysisPrompt()
+    ctx = BugAnalysisContext(
+        error_message="KeyError",
+        stack_trace="",
+        source_code="d['missing']",
+    )
+    sections = prompt._build_sections(ctx)
+    assert len(sections) >= 1
+    assert any(s.label == "Error Information" for s in sections)
+
+
+def test_root_cause_build_sections_with_bug_context() -> None:
+    """Test RootCauseAnalysisPrompt._build_sections routes through isinstance check."""
+    prompt = RootCauseAnalysisPrompt()
+    ctx = BugAnalysisContext(
+        error_message="IndexError",
+        stack_trace="",
+        source_code="lst[99]",
+    )
+    sections = prompt._build_sections(ctx)
+    assert len(sections) >= 1

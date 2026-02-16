@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -62,6 +63,9 @@ def test_update_existing_baseline(baselines_manager: DriftBaselinesManager) -> N
         test_id="test_1",
         output="Initial output",
     )
+
+    # Ensure timestamps differ across calls
+    time.sleep(0.01)
 
     # Update it
     baselines_manager.set_baseline(

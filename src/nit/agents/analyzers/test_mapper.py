@@ -198,9 +198,9 @@ class TestMapper:
                 full = base / candidate
                 if full.exists():
                     try:
-                        return str(full.relative_to(self._root))
+                        return full.relative_to(self._root).as_posix()
                     except ValueError:
-                        return str(full)
+                        return full.as_posix()
 
         return None
 
@@ -234,9 +234,9 @@ class TestMapper:
             candidate = Path(str(target) + ext)
             if candidate.exists() and candidate.is_file():
                 try:
-                    return str(candidate.relative_to(self._root))
+                    return candidate.relative_to(self._root).as_posix()
                 except ValueError:
-                    return str(candidate)
+                    return candidate.as_posix()
 
         return None
 
@@ -258,8 +258,8 @@ class TestMapper:
             for match in search_dir.rglob(name):
                 if match.is_file():
                     try:
-                        return str(match.relative_to(self._root))
+                        return match.relative_to(self._root).as_posix()
                     except ValueError:
-                        return str(match)
+                        return match.as_posix()
 
         return None

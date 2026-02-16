@@ -5,13 +5,29 @@ from __future__ import annotations
 from nit.llm.context import AssembledContext, DetectedTestPattern, RelatedFile
 from nit.llm.engine import LLMMessage
 from nit.llm.prompts import (
+    AccessibilityTestTemplate,
+    AlembicMigrationTemplate,
     Catch2Template,
+    ContractTestTemplate,
+    DjangoMigrationTemplate,
+    GraphQLTestTemplate,
     GTestTemplate,
+    JestAxeTemplate,
+    JestPactTemplate,
+    JestSnapshotTemplate,
+    JestTemplate,
+    MigrationTestTemplate,
+    MochaTemplate,
+    PlaywrightAxeTemplate,
     PromptSection,
     PromptTemplate,
+    PytestPactTemplate,
+    PytestSyrupyTemplate,
     PytestTemplate,
     RenderedPrompt,
+    SnapshotTestTemplate,
     UnitTestTemplate,
+    VitestPactTemplate,
     VitestTemplate,
 )
 from nit.llm.prompts.base import (
@@ -22,6 +38,18 @@ from nit.llm.prompts.base import (
     format_source_section,
     format_test_patterns_section,
 )
+from nit.llm.prompts.cargo_test_prompt import CargoTestTemplate
+from nit.llm.prompts.go_test_prompt import GoTestTemplate
+from nit.llm.prompts.integration_test import (
+    IntegrationTestTemplate,
+    JestIntegrationTemplate,
+    PytestIntegrationTemplate,
+    VitestIntegrationTemplate,
+)
+from nit.llm.prompts.junit5_prompt import JUnit5Template
+from nit.llm.prompts.kotest_prompt import KotestTemplate
+from nit.llm.prompts.testify_prompt import TestifyTemplate
+from nit.llm.prompts.xunit_prompt import XUnitTemplate
 from nit.parsing.treesitter import (
     ClassInfo,
     FunctionInfo,
@@ -498,78 +526,365 @@ class TestCatch2Template:
 # ── Cross-template consistency ───────────────────────────────────
 
 
+_ALL_UNIT_TEMPLATES: list[type[PromptTemplate]] = [
+    UnitTestTemplate,
+    VitestTemplate,
+    PytestTemplate,
+    GTestTemplate,
+    Catch2Template,
+    GoTestTemplate,
+    JestTemplate,
+    JUnit5Template,
+    KotestTemplate,
+    MochaTemplate,
+    XUnitTemplate,
+    TestifyTemplate,
+    CargoTestTemplate,
+]
+
+_ALL_STANDALONE_TEMPLATES: list[type[PromptTemplate]] = [
+    MigrationTestTemplate,
+    AlembicMigrationTemplate,
+    DjangoMigrationTemplate,
+    SnapshotTestTemplate,
+    JestSnapshotTemplate,
+    PytestSyrupyTemplate,
+    GraphQLTestTemplate,
+    AccessibilityTestTemplate,
+    PlaywrightAxeTemplate,
+    JestAxeTemplate,
+    ContractTestTemplate,
+    PytestPactTemplate,
+    JestPactTemplate,
+    VitestPactTemplate,
+    IntegrationTestTemplate,
+    PytestIntegrationTemplate,
+    VitestIntegrationTemplate,
+    JestIntegrationTemplate,
+]
+
+
 class TestTemplateCrossConsistency:
     def test_all_templates_produce_system_and_user(self) -> None:
         ctx = _make_context()
-        for template_cls in [
-            UnitTestTemplate,
-            VitestTemplate,
-            PytestTemplate,
-            GTestTemplate,
-            Catch2Template,
-        ]:
+        for template_cls in [*_ALL_UNIT_TEMPLATES, *_ALL_STANDALONE_TEMPLATES]:
             result = template_cls().render(ctx)
             assert result.system_message, f"{template_cls.__name__} has empty system message"
             assert result.user_message, f"{template_cls.__name__} has empty user message"
 
     def test_all_templates_include_source(self) -> None:
         ctx = _make_context(source_code="def foo(): pass\n")
-        for template_cls in [
-            UnitTestTemplate,
-            VitestTemplate,
-            PytestTemplate,
-            GTestTemplate,
-            Catch2Template,
-        ]:
+        for template_cls in [*_ALL_UNIT_TEMPLATES, *_ALL_STANDALONE_TEMPLATES]:
             result = template_cls().render(ctx)
             assert "def foo" in result.user_message, f"{template_cls.__name__} missing source code"
 
-    def test_all_templates_include_output_instructions(self) -> None:
+    def test_all_unit_templates_include_output_instructions(self) -> None:
         ctx = _make_context()
-        for template_cls in [
-            UnitTestTemplate,
-            VitestTemplate,
-            PytestTemplate,
-            GTestTemplate,
-            Catch2Template,
-        ]:
+        for template_cls in _ALL_UNIT_TEMPLATES:
             result = template_cls().render(ctx)
             assert (
                 "Output Instructions" in result.user_message
             ), f"{template_cls.__name__} missing output instructions"
 
     def test_framework_templates_have_distinct_names(self) -> None:
-        names = {
-            cls().name
-            for cls in [
-                UnitTestTemplate,
-                VitestTemplate,
-                PytestTemplate,
-                GTestTemplate,
-                Catch2Template,
-            ]
-        }
-        assert len(names) == 5
+        names = {cls().name for cls in [*_ALL_UNIT_TEMPLATES, *_ALL_STANDALONE_TEMPLATES]}
+        assert len(names) == len(_ALL_UNIT_TEMPLATES) + len(_ALL_STANDALONE_TEMPLATES)
 
     def test_framework_templates_add_framework_content(self) -> None:
         ctx = _make_context()
         base_result = UnitTestTemplate().render(ctx)
-        vitest_result = VitestTemplate().render(ctx)
-        pytest_result = PytestTemplate().render(ctx)
-        gtest_result = GTestTemplate().render(ctx)
-        catch2_result = Catch2Template().render(ctx)
+        for template_cls in _ALL_UNIT_TEMPLATES:
+            if template_cls is UnitTestTemplate:
+                continue
+            result = template_cls().render(ctx)
+            assert len(result.system_message) > len(
+                base_result.system_message
+            ), f"{template_cls.__name__} should have longer system message than base"
+            assert len(result.user_message) > len(
+                base_result.user_message
+            ), f"{template_cls.__name__} should have longer user message than base"
 
-        # Framework templates should produce longer system messages
-        assert len(vitest_result.system_message) > len(base_result.system_message)
+
+# ── Standalone template tests ────────────────────────────────────
+
+
+class TestMigrationTemplates:
+    def test_base_migration_name(self) -> None:
+        assert MigrationTestTemplate().name == "migration_test"
+
+    def test_alembic_migration_name(self) -> None:
+        assert AlembicMigrationTemplate().name == "alembic_migration"
+
+    def test_django_migration_name(self) -> None:
+        assert DjangoMigrationTemplate().name == "django_migration"
+
+    def test_alembic_includes_alembic_instructions(self) -> None:
+        ctx = _make_context()
+        result = AlembicMigrationTemplate().render(ctx)
+        assert "alembic" in result.system_message.lower()
+
+    def test_django_includes_django_instructions(self) -> None:
+        ctx = _make_context()
+        result = DjangoMigrationTemplate().render(ctx)
+        assert "django" in result.system_message.lower()
+
+    def test_migration_includes_schema_section(self) -> None:
+        ctx = _make_context()
+        result = MigrationTestTemplate().render(ctx)
+        assert "Schema Validation" in result.user_message
+        assert "Migration Testing" in result.user_message
+
+    def test_migration_output_instructions(self) -> None:
+        ctx = _make_context()
+        result = MigrationTestTemplate().render(ctx)
+        assert "Output Instructions" in result.user_message
+
+
+class TestSnapshotTemplates:
+    def test_base_snapshot_name(self) -> None:
+        assert SnapshotTestTemplate().name == "snapshot_test"
+
+    def test_jest_snapshot_name(self) -> None:
+        assert JestSnapshotTemplate().name == "jest_snapshot"
+
+    def test_pytest_syrupy_name(self) -> None:
+        assert PytestSyrupyTemplate().name == "pytest_syrupy"
+
+    def test_jest_snapshot_includes_jest_instructions(self) -> None:
+        ctx = _make_context()
+        result = JestSnapshotTemplate().render(ctx)
+        assert "jest" in result.system_message.lower()
+
+    def test_pytest_syrupy_includes_syrupy_instructions(self) -> None:
+        ctx = _make_context()
+        result = PytestSyrupyTemplate().render(ctx)
+        assert "syrupy" in result.system_message.lower()
+
+    def test_snapshot_includes_snapshot_sections(self) -> None:
+        ctx = _make_context()
+        result = SnapshotTestTemplate().render(ctx)
+        assert "Snapshot Testing" in result.user_message
+        assert "Snapshot Testing Patterns" in result.user_message
+
+    def test_snapshot_output_instructions(self) -> None:
+        ctx = _make_context()
+        result = SnapshotTestTemplate().render(ctx)
+        assert "Output Instructions" in result.user_message
+
+
+class TestGraphQLTemplate:
+    def test_name(self) -> None:
+        assert GraphQLTestTemplate().name == "graphql_test"
+
+    def test_render_includes_graphql_instructions(self) -> None:
+        ctx = _make_context()
+        result = GraphQLTestTemplate().render(ctx)
+        assert "GraphQL" in result.user_message
+
+    def test_render_includes_example(self) -> None:
+        ctx = _make_context()
+        result = GraphQLTestTemplate().render(ctx)
+        assert "Example Test" in result.user_message
+
+    def test_render_includes_requirements(self) -> None:
+        ctx = _make_context()
+        result = GraphQLTestTemplate().render(ctx)
+        assert "Requirements" in result.user_message
+
+
+# ── AccessibilityTestTemplate ────────────────────────────────────
+
+
+class TestAccessibilityTemplates:
+    def test_base_name(self) -> None:
+        assert AccessibilityTestTemplate().name == "accessibility_test"
+
+    def test_playwright_axe_name(self) -> None:
+        assert PlaywrightAxeTemplate().name == "playwright_axe"
+
+    def test_jest_axe_name(self) -> None:
+        assert JestAxeTemplate().name == "jest_axe"
+
+    def test_includes_a11y_sections(self) -> None:
+        ctx = _make_context()
+        result = AccessibilityTestTemplate().render(ctx)
+        assert "Accessibility Testing" in result.user_message
+        assert "Accessibility Testing Patterns" in result.user_message
+
+    def test_output_instructions(self) -> None:
+        ctx = _make_context()
+        result = AccessibilityTestTemplate().render(ctx)
+        assert "Output Instructions" in result.user_message
+
+    def test_playwright_includes_framework_instructions(self) -> None:
+        ctx = _make_context(language="typescript")
+        result = PlaywrightAxeTemplate().render(ctx)
+        assert "playwright" in result.system_message.lower()
+
+    def test_jest_axe_includes_framework_instructions(self) -> None:
+        ctx = _make_context(language="typescript")
+        result = JestAxeTemplate().render(ctx)
+        assert "jest-axe" in result.system_message.lower()
+
+    def test_base_has_no_extra_framework_instructions(self) -> None:
+        ctx = _make_context()
+        base_result = AccessibilityTestTemplate().render(ctx)
+        pw_result = PlaywrightAxeTemplate().render(ctx)
+        assert len(pw_result.system_message) > len(base_result.system_message)
+
+    def test_related_files_included_when_present(self) -> None:
+        ctx = _make_context(
+            related_files=[
+                RelatedFile(
+                    path="a11y/helpers.ts",
+                    relationship="import",
+                    content_snippet="export function setupAxe() {}",
+                ),
+            ],
+        )
+        result = AccessibilityTestTemplate().render(ctx)
+        assert "Related Files" in result.user_message
+
+    def test_related_files_excluded_when_empty(self) -> None:
+        ctx = _make_context(related_files=[])
+        result = AccessibilityTestTemplate().render(ctx)
+        assert "Related Files" not in result.user_message
+
+
+# ── ContractTestTemplate ─────────────────────────────────────────
+
+
+class TestContractTemplates:
+    def test_base_name(self) -> None:
+        assert ContractTestTemplate().name == "contract_test"
+
+    def test_pytest_pact_name(self) -> None:
+        assert PytestPactTemplate().name == "pytest_pact"
+
+    def test_jest_pact_name(self) -> None:
+        assert JestPactTemplate().name == "jest_pact"
+
+    def test_vitest_pact_name(self) -> None:
+        assert VitestPactTemplate().name == "vitest_pact"
+
+    def test_includes_contract_sections(self) -> None:
+        ctx = _make_context()
+        result = ContractTestTemplate().render(ctx)
+        assert "Contract Testing" in result.user_message
+        assert "Pact Testing Patterns" in result.user_message
+
+    def test_output_instructions(self) -> None:
+        ctx = _make_context()
+        result = ContractTestTemplate().render(ctx)
+        assert "Output Instructions" in result.user_message
+
+    def test_pytest_pact_includes_framework_instructions(self) -> None:
+        ctx = _make_context()
+        result = PytestPactTemplate().render(ctx)
+        assert "pact-python" in result.system_message.lower()
+
+    def test_jest_pact_includes_framework_instructions(self) -> None:
+        ctx = _make_context(language="typescript")
+        result = JestPactTemplate().render(ctx)
+        assert "jest" in result.system_message.lower()
+        assert "pact" in result.system_message.lower()
+
+    def test_vitest_pact_includes_framework_instructions(self) -> None:
+        ctx = _make_context(language="typescript")
+        result = VitestPactTemplate().render(ctx)
+        assert "vitest" in result.system_message.lower()
+        assert "pact" in result.system_message.lower()
+
+    def test_base_has_no_extra_framework_instructions(self) -> None:
+        ctx = _make_context()
+        base_result = ContractTestTemplate().render(ctx)
+        pact_result = PytestPactTemplate().render(ctx)
+        assert len(pact_result.system_message) > len(base_result.system_message)
+
+    def test_related_files_included_when_present(self) -> None:
+        ctx = _make_context(
+            related_files=[
+                RelatedFile(
+                    path="pacts/consumer-provider.json",
+                    relationship="contract",
+                    content_snippet='{"consumer": {"name": "web"}}',
+                ),
+            ],
+        )
+        result = ContractTestTemplate().render(ctx)
+        assert "Related Files" in result.user_message
+
+    def test_related_files_excluded_when_empty(self) -> None:
+        ctx = _make_context(related_files=[])
+        result = ContractTestTemplate().render(ctx)
+        assert "Related Files" not in result.user_message
+
+
+# ── IntegrationTestTemplate ──────────────────────────────────────
+
+
+class TestIntegrationTemplates:
+    def test_base_name(self) -> None:
+        assert IntegrationTestTemplate().name == "integration_test"
+
+    def test_pytest_integration_name(self) -> None:
+        assert PytestIntegrationTemplate().name == "pytest_integration"
+
+    def test_vitest_integration_name(self) -> None:
+        assert VitestIntegrationTemplate().name == "vitest_integration"
+
+    def test_jest_integration_name(self) -> None:
+        assert JestIntegrationTemplate().name == "jest_integration"
+
+    def test_includes_integration_sections(self) -> None:
+        ctx = _make_context()
+        result = IntegrationTestTemplate().render(ctx)
+        assert "Integration Testing" in result.user_message
+        assert "Mocking Guidance" in result.user_message
+
+    def test_output_instructions(self) -> None:
+        ctx = _make_context()
+        result = IntegrationTestTemplate().render(ctx)
+        assert "Output Instructions" in result.user_message
+
+    def test_pytest_integration_includes_framework_instructions(self) -> None:
+        ctx = _make_context()
+        result = PytestIntegrationTemplate().render(ctx)
+        assert "pytest" in result.system_message.lower()
+
+    def test_vitest_integration_includes_framework_instructions(self) -> None:
+        ctx = _make_context(language="typescript")
+        result = VitestIntegrationTemplate().render(ctx)
+        assert "vitest" in result.system_message.lower()
+
+    def test_jest_integration_includes_framework_instructions(self) -> None:
+        ctx = _make_context(language="typescript")
+        result = JestIntegrationTemplate().render(ctx)
+        assert "jest" in result.system_message.lower()
+
+    def test_base_has_no_extra_framework_instructions(self) -> None:
+        ctx = _make_context()
+        base_result = IntegrationTestTemplate().render(ctx)
+        pytest_result = PytestIntegrationTemplate().render(ctx)
         assert len(pytest_result.system_message) > len(base_result.system_message)
-        assert len(gtest_result.system_message) > len(base_result.system_message)
-        assert len(catch2_result.system_message) > len(base_result.system_message)
 
-        # Framework templates should include extra sections
-        assert len(vitest_result.user_message) > len(base_result.user_message)
-        assert len(pytest_result.user_message) > len(base_result.user_message)
-        assert len(gtest_result.user_message) > len(base_result.user_message)
-        assert len(catch2_result.user_message) > len(base_result.user_message)
+    def test_related_files_included_when_present(self) -> None:
+        ctx = _make_context(
+            related_files=[
+                RelatedFile(
+                    path="tests/conftest.py",
+                    relationship="test",
+                    content_snippet="@pytest.fixture\ndef db_session(): ...",
+                ),
+            ],
+        )
+        result = IntegrationTestTemplate().render(ctx)
+        assert "Related Files" in result.user_message
+
+    def test_related_files_excluded_when_empty(self) -> None:
+        ctx = _make_context(related_files=[])
+        result = IntegrationTestTemplate().render(ctx)
+        assert "Related Files" not in result.user_message
 
 
 # ── Helpers ──────────────────────────────────────────────────────

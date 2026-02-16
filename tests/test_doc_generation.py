@@ -5,6 +5,7 @@ from __future__ import annotations
 from nit.llm.prompts.doc_generation import (
     DocChange,
     DocGenerationContext,
+    DocGenerationTemplate,
     build_doc_generation_messages,
     build_mismatch_detection_messages,
 )
@@ -257,3 +258,45 @@ class TestFrameworkInstructions:
     def test_unknown_framework_fallback(self) -> None:
         system = self._system_for("unknown_framework")
         assert "clear, concise documentation" in system
+
+
+# ── DocGenerationTemplate ────────────────────────────────────────────
+
+
+class TestDocGenerationTemplate:
+    def _make_ctx(self) -> DocGenerationContext:
+        return DocGenerationContext(
+            changes=[DocChange("foo", "new", "def foo()")],
+            doc_framework="sphinx",
+            language="python",
+            source_path="mod.py",
+            source_code="def foo(): pass\n",
+        )
+
+    def test_name_includes_framework(self) -> None:
+        ctx = self._make_ctx()
+        tmpl = DocGenerationTemplate(ctx)
+        assert tmpl.name == "doc_generation_sphinx"
+
+    def test_system_instruction(self) -> None:
+        ctx = self._make_ctx()
+        tmpl = DocGenerationTemplate(ctx)
+        # _system_instruction takes an AssembledContext but it's ignored;
+        # pass None since it's duck-typed.
+        instruction = tmpl._system_instruction(None)  # type: ignore[arg-type]
+        assert isinstance(instruction, str)
+        assert len(instruction) > 0
+
+    def test_build_sections_returns_empty(self) -> None:
+        ctx = self._make_ctx()
+        tmpl = DocGenerationTemplate(ctx)
+        sections = tmpl._build_sections(None)  # type: ignore[arg-type]
+        assert sections == []
+
+    def test_build_messages(self) -> None:
+        ctx = self._make_ctx()
+        tmpl = DocGenerationTemplate(ctx)
+        msgs = tmpl.build_messages()
+        assert len(msgs) == 2
+        assert msgs[0].role == "system"
+        assert msgs[1].role == "user"
