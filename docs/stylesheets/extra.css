@@ -8,6 +8,7 @@
   --md-primary-fg-color--dark: #030912;
   --md-accent-fg-color: #2f8cff;
   --md-accent-fg-color--transparent: rgba(47, 140, 255, 0.1);
+  --md-typeset-a-color: #2f8cff;
 }
 
 /* Dark mode */
@@ -17,4 +18,7 @@
   --md-primary-fg-color--dark: #030912;
   --md-accent-fg-color: #c8ff3d;
   --md-accent-fg-color--transparent: rgba(200, 255, 61, 0.1);
+  --md-typeset-a-color: #c8ff3d;
+  --md-default-fg-color: rgba(255, 255, 255, 0.87);
+  --md-default-fg-color--light: rgba(255, 255, 255, 0.54);
 }
